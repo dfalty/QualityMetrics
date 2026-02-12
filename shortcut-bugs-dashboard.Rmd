@@ -12,6 +12,9 @@ runtime: shiny
 ---
 
 ```{r setup, include=FALSE}
+# Load project .Renviron (Rscript doesn't load it automatically)
+if (file.exists(".Renviron")) readRenviron(".Renviron")
+
 library(flexdashboard)
 library(tidyverse)
 library(lubridate)
@@ -23,6 +26,8 @@ library(reactable)
 # ============================
 # CONFIG
 # ============================
+# Auth: GOOGLE_SA_JSON (full JSON string) for Posit Connect; GOOGLE_SA_JSON_PATH for local dev
+GOOGLE_SA_JSON <- Sys.getenv("GOOGLE_SA_JSON", unset = "")
 GOOGLE_SA_JSON_PATH <- Sys.getenv("GOOGLE_SA_JSON_PATH", unset = "")
 SHORTCUT_TICKETS <- Sys.getenv("SHORTCUT_TICKETS", unset = "")
 SHORTCUT_TICKETS_TAB_BUGS <- Sys.getenv("SHORTCUT_TICKETS_TAB_BUGS", unset = "Bugs")
@@ -148,9 +153,19 @@ normalize_severity <- function(x) {
   )
 }
 
+auth_gs <- function() {
+  if (nzchar(GOOGLE_SA_JSON)) {
+    googlesheets4::gs4_auth(path = GOOGLE_SA_JSON)
+  } else if (nzchar(GOOGLE_SA_JSON_PATH) && file.exists(GOOGLE_SA_JSON_PATH)) {
+    googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  } else {
+    stop("Set GOOGLE_SA_JSON (Posit Connect) or GOOGLE_SA_JSON_PATH (local) with valid credentials")
+  }
+}
+
 # ---------- Readers ----------
 read_bugs <- function() {
-  googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  auth_gs()
   googlesheets4::read_sheet(
     ss = SHORTCUT_TICKETS,
     sheet = SHORTCUT_TICKETS_TAB_BUGS,
@@ -160,7 +175,7 @@ read_bugs <- function() {
 }
 
 read_features <- function() {
-  googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  auth_gs()
   googlesheets4::read_sheet(
     ss = SHORTCUT_TICKETS,
     sheet = SHORTCUT_TICKETS_TAB_FEATURES,
@@ -170,7 +185,7 @@ read_features <- function() {
 }
 
 read_chores <- function() {
-  googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  auth_gs()
   googlesheets4::read_sheet(
     ss = SHORTCUT_TICKETS,
     sheet = SHORTCUT_TICKETS_TAB_CHORES,
@@ -240,7 +255,7 @@ severity_badge <- function(value) {
 }
 
 read_qa_snapshots <- function() {
-  googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  auth_gs()
   googlesheets4::read_sheet(
     ss = TIME_DATA_SHEET_ID,
     sheet = TIME_DATA_SHEET_TAB,

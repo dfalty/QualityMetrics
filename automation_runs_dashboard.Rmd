@@ -22,6 +22,8 @@ library(scales)
 # ============================
 # CONFIG
 # ============================
+# Auth: GOOGLE_SA_JSON (full JSON string) for Posit Connect; GOOGLE_SA_JSON_PATH for local dev
+GOOGLE_SA_JSON <- Sys.getenv("GOOGLE_SA_JSON", unset = "")
 GOOGLE_SA_JSON_PATH <- Sys.getenv("GOOGLE_SA_JSON_PATH", unset = "")
 AUTOMATION_SHEET_ID <- Sys.getenv("AUTOMATION_SHEET_ID", unset = "")
 AUTOMATION_SHEET_TAB <- Sys.getenv("AUTOMATION_SHEET_TAB", unset = "UI")
@@ -75,8 +77,13 @@ add_plotly_border <- function(p, color = "#333333", width = 1) {
 # DATA
 # ============================
 auth_gs <- function() {
-  if (!file.exists(GOOGLE_SA_JSON_PATH)) stop("Service account JSON not found")
-  googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  if (nzchar(GOOGLE_SA_JSON)) {
+    googlesheets4::gs4_auth(path = GOOGLE_SA_JSON)  # path accepts JSON string (Posit Connect)
+  } else if (nzchar(GOOGLE_SA_JSON_PATH) && file.exists(GOOGLE_SA_JSON_PATH)) {
+    googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  } else {
+    stop("Set GOOGLE_SA_JSON (Posit Connect) or GOOGLE_SA_JSON_PATH (local) with valid credentials")
+  }
 }
 
 read_runs <- function() {

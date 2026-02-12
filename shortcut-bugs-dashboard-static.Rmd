@@ -23,6 +23,8 @@ library(DT)
 # ============================
 # CONFIG
 # ============================
+# Auth: GOOGLE_SA_JSON (full JSON string) for Posit Connect; GOOGLE_SA_JSON_PATH for local dev
+GOOGLE_SA_JSON <- Sys.getenv("GOOGLE_SA_JSON", unset = "")
 GOOGLE_SA_JSON_PATH <- Sys.getenv("GOOGLE_SA_JSON_PATH", unset = "")
 SHORTCUT_TICKETS <- Sys.getenv("SHORTCUT_TICKETS", unset = "")
 SHORTCUT_TICKETS_TAB_BUGS <- Sys.getenv("SHORTCUT_TICKETS_TAB_BUGS", unset = "Bugs")
@@ -279,7 +281,16 @@ clean_qa_snapshots <- function(df) {
 # ============================
 # STATIC SNAPSHOT (READ ONCE PER KNIT)
 # ============================
-googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+auth_gs <- function() {
+  if (nzchar(GOOGLE_SA_JSON)) {
+    googlesheets4::gs4_auth(path = GOOGLE_SA_JSON)
+  } else if (nzchar(GOOGLE_SA_JSON_PATH) && file.exists(GOOGLE_SA_JSON_PATH)) {
+    googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  } else {
+    stop("Set GOOGLE_SA_JSON (Posit Connect) or GOOGLE_SA_JSON_PATH (local) with valid credentials")
+  }
+}
+auth_gs()
 
 BUGS_RAW     <- read_bugs()
 FEATURES_RAW <- read_features()
