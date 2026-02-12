@@ -1,0 +1,327 @@
+---
+title: "Automation Runs Dashboard"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    theme:
+      version: 4
+      bootswatch: slate
+    self_contained: true
+css: styles.css
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(lubridate)
+library(plotly)
+library(googlesheets4)
+library(scales)
+
+# ============================
+# CONFIG
+# ============================
+GOOGLE_SA_JSON_PATH <- Sys.getenv("GOOGLE_SA_JSON_PATH", unset = "")
+AUTOMATION_SHEET_ID <- Sys.getenv("AUTOMATION_SHEET_ID", unset = "")
+AUTOMATION_SHEET_TAB <- Sys.getenv("AUTOMATION_SHEET_TAB", unset = "UI")
+RUNS_SHEET_RANGE <- Sys.getenv("RUNS_SHEET_RANGE", unset = "A:D")
+RUNS_TZ <- Sys.getenv("RUNS_TZ", unset = "UTC")
+
+# ============================
+# DESIGN SYSTEM (MATCH SHORTCUT)
+# ============================
+BASE_THEME <- theme_minimal(base_size = 12) +
+  theme(
+    plot.background = element_rect(fill = "#1f1f1f", color = NA),
+    panel.background = element_rect(fill = "#1f1f1f", color = NA),
+    panel.grid.major = element_line(color = "#333333"),
+    panel.grid.minor = element_blank(),
+    text = element_text(color = "#e6e6e6"),
+    axis.text = element_text(color = "#cccccc"),
+    axis.title = element_text(color = "#cccccc"),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "#aaaaaa"),
+    legend.background = element_rect(fill = "#1f1f1f"),
+    legend.key = element_rect(fill = "#1f1f1f"),
+    legend.text = element_text(color = "#e6e6e6"),
+    legend.title = element_text(color = "#e6e6e6")
+  )
+
+plotly_title <- function(text) {
+  list(
+    text = paste0("<b>", text, "</b>"),
+    x = 0.02,
+    xanchor = "left",
+    font = list(size = 14, color = "#e6e6e6")
+  )
+}
+
+add_plotly_border <- function(p, color = "#333333", width = 1) {
+  p %>% layout(
+    shapes = list(
+      list(
+        type = "rect",
+        xref = "paper", yref = "paper",
+        x0 = 0, y0 = 0, x1 = 1, y1 = 1,
+        line = list(color = color, width = width),
+        fillcolor = "rgba(0,0,0,0)"
+      )
+    )
+  )
+}
+
+# ============================
+# DATA
+# ============================
+auth_gs <- function() {
+  if (!file.exists(GOOGLE_SA_JSON_PATH)) stop("Service account JSON not found")
+  googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+}
+
+read_runs <- function() {
+  auth_gs()
+  googlesheets4::read_sheet(
+    ss = AUTOMATION_SHEET_ID,
+    sheet = AUTOMATION_SHEET_TAB,
+    range = RUNS_SHEET_RANGE,
+    col_types = "cccc"
+  )
+}
+
+clean_runs <- function(df) {
+  df %>%
+    rename_with(~str_trim(.x)) %>%
+    mutate(
+      Date = parse_date_time(
+        Date,
+        orders = c("ymd HMS", "mdy HMS", "ymd HM", "mdy HM", "ymd", "mdy"),
+        tz = RUNS_TZ
+      ),
+      `Run Type` = str_to_title(str_trim(`Run Type`)),
+      Result = str_to_title(str_trim(Result)),
+      `Failure Attribution` = if_else(
+        is.na(`Failure Attribution`) | str_trim(`Failure Attribution`) == "",
+        NA_character_,
+        str_to_title(str_trim(`Failure Attribution`))
+      ),
+      Run_Day = as_date(Date)
+    ) %>%
+    filter(!is.na(Date), Result %in% c("Pass", "Fail"))
+}
+
+runs_data <- read_runs() %>% clean_runs()
+latest_run_at <- max(runs_data$Date, na.rm = TRUE)
+```
+
+Automation Runs
+=====================================
+
+Row
+-------------------------------------
+
+###
+
+```{r daily_pass_rate}
+df <- runs_data %>%
+  group_by(Run_Day) %>%
+  summarise(
+    Total = n(),
+    Passed = sum(Result == "Pass"),
+    Failed = sum(Result == "Fail"),
+    Pass_Rate = Passed / Total,
+    .groups = "drop"
+  ) %>%
+  arrange(Run_Day)
+
+p <- ggplot(
+  df,
+  aes(
+    Run_Day,
+    Pass_Rate,
+    group = 1,
+    text = paste0(
+      "Run Day: ", Run_Day,
+      "<br>Pass Rate: ", scales::percent(Pass_Rate, accuracy = 0.1)
+    )
+  )
+) +
+  geom_line(color = "#5bc0de", linewidth = 1) +
+  geom_point(color = "#5bc0de", size = 2) +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(
+    x = NULL,
+    y = "Pass Rate",
+    subtitle = paste(
+      "Latest run:",
+      format(latest_run_at, "%b %d, %H:%M", tz = RUNS_TZ),
+      RUNS_TZ
+    )
+  ) +
+  BASE_THEME
+
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    title = plotly_title("Daily Pass Rate"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    yaxis = list(tickformat = ".0%")
+  ) %>%
+  add_plotly_border()
+```
+
+Failure Attribution
+=====================================
+
+Row
+-------------------------------------
+
+### 
+
+```{r daily_failures_by_attribution}
+attribution_levels <- c(
+  "Test Bug",
+  "Product Change",
+  "Product Bug",
+  "Platform Issue",
+  "Needs Triage"
+)
+
+attribution_colors <- c(
+  "Test Bug" = "#5bc0de",
+  "Product Change" = "#f0ad4e",
+  "Product Bug" = "#d9534f",
+  "Platform Issue" = "#9e56bf",
+  "Needs Triage" = "#7F7F7F"
+)
+
+df <- runs_data %>%
+  filter(Result == "Fail") %>%
+  mutate(
+    `Failure Attribution` = if_else(
+      is.na(`Failure Attribution`),
+      "Needs Triage",
+      `Failure Attribution`
+    )
+  ) %>%
+  count(Run_Day, `Failure Attribution`, name = "Failures") %>%
+  complete(
+    Run_Day,
+    `Failure Attribution` = attribution_levels,
+    fill = list(Failures = 0)
+  )
+
+p <- ggplot(
+  df,
+  aes(Run_Day, Failures, fill = `Failure Attribution`)
+) +
+  geom_col(width = 0.85) +
+  scale_fill_manual(values = attribution_colors) +
+  labs(x = NULL, y = "Failures") +
+  BASE_THEME +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(p) %>%
+  layout(
+    title = plotly_title("Daily Failures by Attribution"),
+    barmode = "stack",
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    legend = list(orientation = "h", x = 0.02, y = -0.25)
+  ) %>%
+  add_plotly_border()
+```
+
+Passing Rate
+=====================================
+
+Row
+-------------------------------------
+
+###
+```{r monthly_avg_pass_rate}
+monthly_df <- runs_data %>%
+  group_by(
+    Month = floor_date(Run_Day, "month")
+  ) %>%
+  summarise(
+    Total = n(),
+    Passed = sum(Result == "Pass"),
+    Avg_Pass_Rate = Passed / Total,
+    .groups = "drop"
+  ) %>%
+  arrange(Month)
+
+p <- ggplot(
+  monthly_df,
+  aes(
+    Month,
+    Avg_Pass_Rate,
+    group = 1,
+    text = paste0(
+      "Month: ", format(Month, "%b %Y"),
+      "<br>Avg Pass Rate: ", scales::percent(Avg_Pass_Rate, accuracy = 0.1)
+    )
+  )
+) +
+  geom_line(color = "#5bc0de", linewidth = 1) +
+  geom_point(color = "#5bc0de", size = 2) +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(x = NULL, y = "Average Pass Rate") +
+  BASE_THEME
+
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    title = plotly_title("Average Passing Rate per Month"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    yaxis = list(tickformat = ".0%")
+  ) %>%
+  add_plotly_border()
+```
+
+
+Row
+-------------------------------------
+
+###
+```{r weekly_avg_pass_rate}
+weekly_df <- runs_data %>%
+  group_by(
+    Week = floor_date(Run_Day, "week", week_start = 1)
+  ) %>%
+  summarise(
+    Total = n(),
+    Passed = sum(Result == "Pass"),
+    Avg_Pass_Rate = Passed / Total,
+    .groups = "drop"
+  ) %>%
+  arrange(Week)
+
+p <- ggplot(
+  weekly_df,
+  aes(
+    Week,
+    Avg_Pass_Rate,
+    group = 1,
+    text = paste0(
+      "Week of: ", format(Week, "%b %d, %Y"),
+      "<br>Avg Pass Rate: ", scales::percent(Avg_Pass_Rate, accuracy = 0.1)
+    )
+  )
+) +
+  geom_line(color = "#5bc0de", linewidth = 1) +
+  geom_point(color = "#5bc0de", size = 2) +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(x = NULL, y = "Average Pass Rate") +
+  BASE_THEME
+
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    title = plotly_title("Average Passing Rate per Week"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    yaxis = list(tickformat = ".0%")
+  ) %>%
+  add_plotly_border()
+```

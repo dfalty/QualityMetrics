@@ -1,0 +1,77 @@
+/* =========================
+   FLEXDASHBOARD NAVBAR FIX
+   (force override slate)
+   ========================= */
+
+/* Hit ALL common navbar variants + inner wrappers */
+.navbar,
+.navbar.navbar-default,
+.navbar.navbar-inverse,
+.navbar-default,
+.navbar-inverse,
+.navbar .container,
+.navbar .container-fluid,
+.navbar-header,
+.navbar-collapse {
+  background: #121417 !important;
+  background-image: none !important;
+  border-color: #2a2f36 !important;
+  box-shadow: none !important;
+}
+
+/* Remove any Slate gradients/pills */
+.navbar * {
+  text-shadow: none !important;
+}
+
+/* Brand/title */
+.navbar .navbar-brand,
+.navbar-default .navbar-brand,
+.navbar-inverse .navbar-brand {
+  color: #ffffff !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.2px;
+}
+
+/* Tab links (inactive) */
+.navbar .navbar-nav > li > a,
+.navbar-default .navbar-nav > li > a,
+.navbar-inverse .navbar-nav > li > a {
+  color: #c8d0d8 !important;
+  font-weight: 650 !important;
+  opacity: 1 !important;                 /* kills “blurry/washed” look */
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 12px !important;
+  margin: 6px 6px !important;
+  padding: 10px 14px !important;
+}
+
+/* Hover: lighter lift (readable) */
+.navbar .navbar-nav > li > a:hover,
+.navbar .navbar-nav > li > a:focus,
+.navbar-default .navbar-nav > li > a:hover,
+.navbar-inverse .navbar-nav > li > a:hover {
+  color: #ffffff !important;
+  background: rgba(255,255,255,0.08) !important;
+  border-color: rgba(255,255,255,0.14) !important;
+}
+
+/* Active: teal underline (no grey pill) */
+.navbar .navbar-nav > .active > a,
+.navbar .navbar-nav > .active > a:hover,
+.navbar .navbar-nav > .active > a:focus,
+.navbar-default .navbar-nav > .active > a,
+.navbar-inverse .navbar-nav > .active > a {
+  color: #ffffff !important;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: inset 0 -3px 0 #5bc0de !important;  /* teal underline */
+}
+
+/* Optional: make the whole bar feel “connected” to dark dashboard */
+.navbar {
+  min-height: 54px !important;
+}
+
+.reactable { width: 100% !important; }

@@ -1,0 +1,1091 @@
+---
+title: "Shortcut Dashboard"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    theme:
+      version: 4
+      bootswatch: slate
+css: styles.css
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(lubridate)
+library(plotly)
+library(googlesheets4)
+library(shiny)
+library(reactable)
+
+# ============================
+# CONFIG
+# ============================
+GOOGLE_SA_JSON_PATH <- Sys.getenv("GOOGLE_SA_JSON_PATH", unset = "")
+SHORTCUT_TICKETS <- Sys.getenv("SHORTCUT_TICKETS", unset = "")
+SHORTCUT_TICKETS_TAB_BUGS <- Sys.getenv("SHORTCUT_TICKETS_TAB_BUGS", unset = "Bugs")
+SHORTCUT_TICKETS_TAB_FEATURES <- Sys.getenv("SHORTCUT_TICKETS_TAB_FEATURES", unset = "Features")
+SHORTCUT_TICKETS_TAB_CHORES <- Sys.getenv("SHORTCUT_TICKETS_TAB_CHORES", unset = "Chores")
+SHORTCUT_TICKETS_TAB_BUGS_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_BUGS_RANGE", unset = "A:I")
+SHORTCUT_TICKETS_TAB_FEATURES_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_FEATURES_RANGE", unset = "A:H")
+SHORTCUT_TICKETS_TAB_CHORES_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_CHORES_RANGE", unset = "A:H")
+
+TIME_DATA_SHEET_ID <- Sys.getenv("TIME_DATA_SHEET_ID", unset = "")
+TIME_DATA_SHEET_TAB <- Sys.getenv("TIME_DATA_SHEET_TAB", unset = "State")
+TIME_DATA_SHEET_RANGE <- Sys.getenv("TIME_DATA_SHEET_RANGE", unset = "A:J")
+
+# ============================
+# DESIGN SYSTEM
+# ============================
+SEVERITY_COLORS <- c(
+  "S0 - Critical" = "#d9534f",
+  "S1 - High"     = "#f0ad4e",
+  "S2 - Medium"   = "#5bc0de",
+  "S3 - Low"      = "#5cb85c",
+  "Need Triage"   = "#777777"
+)
+
+HIERARCHY_COLORS <- c(
+  "Regular Bug"  = "#5bc0de",
+  "Sub-task Bug" = "#f0ad4e"
+)
+
+severity_levels <- c(
+  "S0 - Critical",
+  "S1 - High",
+  "S2 - Medium",
+  "S3 - Low",
+  "Need Triage"
+)
+
+# Completed work colors (monthly completions by type)
+WORKTYPE_COLORS <- c(
+  "Bug"     = "#d9534f",
+  "Feature" = "#5bc0de",
+  "Chore"   = "#5cb85c"
+)
+
+BASE_THEME <- theme_minimal(base_size = 12) +
+  theme(
+    plot.background = element_rect(fill = "#1f1f1f", color = NA),
+    panel.background = element_rect(fill = "#1f1f1f", color = NA),
+    panel.grid.major = element_line(color = "#333333"),
+    panel.grid.minor = element_blank(),
+    text = element_text(color = "#e6e6e6"),
+    axis.text = element_text(color = "#cccccc"),
+    axis.title = element_text(color = "#cccccc"),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "#aaaaaa"),
+    legend.background = element_rect(fill = "#1f1f1f"),
+    legend.key = element_rect(fill = "#1f1f1f"),
+    legend.text = element_text(color = "#e6e6e6"),
+    legend.title = element_text(color = "#e6e6e6")
+  )
+
+# ============================
+# PLOTLY TITLE + BORDER HELPERS
+# ============================
+plotly_title <- function(text) {
+  list(
+    text = paste0("<b>", text, "</b>"),
+    x = 0.02,
+    xanchor = "left",
+    font = list(size = 14, color = "#e6e6e6")
+  )
+}
+
+add_plotly_border <- function(p, color = "#e6e6e6", width = 1) {
+  p %>% layout(
+    shapes = list(
+      list(
+        type = "rect",
+        xref = "paper", yref = "paper",
+        x0 = 0, y0 = 0, x1 = 1, y1 = 1,
+        line = list(color = color, width = width),
+        fillcolor = "rgba(0,0,0,0)"
+      )
+    )
+  )
+}
+
+# ============================
+# REACTABLE THEME (DARK)
+# ============================
+REACTABLE_THEME_DARK <- reactableTheme(
+  color = "#e6e6e6",
+  backgroundColor = "#1f1f1f",
+  borderColor = "#333333",
+  stripedColor = "#242424",
+  highlightColor = "#2b2b2b",
+  cellPadding = "10px 12px",
+  style = list(fontSize = "13px"),
+  headerStyle = list(
+    backgroundColor = "#1a1a1a",
+    color = "#e6e6e6",
+    borderColor = "#333333",
+    fontWeight = 600
+  ),
+  tableBodyStyle = list(borderColor = "#333333")
+)
+
+normalize_severity <- function(x) {
+  x <- as.character(x)
+  x <- stringr::str_trim(x)
+  x[x %in% c("", NA, "NA")] <- "Need Triage"
+
+  dplyr::recode(x,
+    "Severity 0" = "S0 - Critical",
+    "Severity 1" = "S1 - High",
+    "Severity 2" = "S2 - Medium",
+    "Severity 3" = "S3 - Low",
+    "S0" = "S0 - Critical",
+    "S1" = "S1 - High",
+    "S2" = "S2 - Medium",
+    "S3" = "S3 - Low",
+    .default = x
+  )
+}
+
+# ---------- Readers ----------
+read_bugs <- function() {
+  googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  googlesheets4::read_sheet(
+    ss = SHORTCUT_TICKETS,
+    sheet = SHORTCUT_TICKETS_TAB_BUGS,
+    range = SHORTCUT_TICKETS_TAB_BUGS_RANGE,
+    col_types = "c"
+  )
+}
+
+read_features <- function() {
+  googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  googlesheets4::read_sheet(
+    ss = SHORTCUT_TICKETS,
+    sheet = SHORTCUT_TICKETS_TAB_FEATURES,
+    range = SHORTCUT_TICKETS_TAB_FEATURES_RANGE,
+    col_types = "c"
+  )
+}
+
+read_chores <- function() {
+  googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  googlesheets4::read_sheet(
+    ss = SHORTCUT_TICKETS,
+    sheet = SHORTCUT_TICKETS_TAB_CHORES,
+    range = SHORTCUT_TICKETS_TAB_CHORES_RANGE,
+    col_types = "c"
+  )
+}
+
+# ---------- Cleaners ----------
+clean_bugs <- function(df) {
+  df %>%
+    mutate(
+      `Created At` = parse_date_time(
+        `Created At`,
+        orders = c("ymd HMS", "mdy HMS", "ymd HM", "mdy HM", "ymd", "mdy"),
+        tz = "UTC"
+      ),
+      Severity = normalize_severity(Severity),
+      Product  = if_else(is.na(Product) | Product == "", "Unspecified", str_trim(Product)),
+      # Logic for Parent ID check
+      Hierarchy_Type = if_else(is.na(`Parent ID`) | `Parent ID` == "", "Regular Bug", "Sub-task Bug")
+    ) %>%
+    filter(!is.na(`Created At`))
+}
+
+# Generic cleaner for "completed work" chart
+clean_completed <- function(df, type_label) {
+
+  # Ensure required columns exist even if missing
+  if (!("Completed At" %in% names(df))) df$`Completed At` <- NA_character_
+  if (!("Story Points" %in% names(df))) df$`Story Points` <- NA_character_
+
+  df %>%
+    mutate(
+      Type = type_label,
+      `Completed At` = parse_date_time(
+        `Completed At`,
+        orders = c("ymd HMS", "mdy HMS", "ymd HM", "mdy HM", "ymd", "mdy"),
+        tz = "UTC"
+      ),
+      # Always create this column
+      Story_Points = suppressWarnings(readr::parse_number(as.character(`Story Points`))),
+      Story_Points = replace_na(Story_Points, 0),
+      Month = floor_date(`Completed At`, "month")
+    ) %>%
+    filter(!is.na(`Completed At`))
+}
+
+
+severity_badge <- function(value) {
+  col <- SEVERITY_COLORS[[as.character(value)]]
+  if (is.null(col)) col <- "#777777"
+
+  div(
+    style = list(
+      display = "inline-block",
+      padding = "3px 10px",
+      borderRadius = "999px",
+      background = col,
+      color = "#111111",
+      fontWeight = 700,
+      fontSize = "12px",
+      lineHeight = "18px"
+    ),
+    value
+  )
+}
+
+read_qa_snapshots <- function() {
+  googlesheets4::gs4_auth(path = GOOGLE_SA_JSON_PATH)
+  googlesheets4::read_sheet(
+    ss = TIME_DATA_SHEET_ID,
+    sheet = TIME_DATA_SHEET_TAB,
+    range = TIME_DATA_SHEET_RANGE,
+    col_types = "c"
+  )
+}
+
+clean_qa_snapshots <- function(df) {
+  if (!("Date/Time" %in% names(df))) {
+    dt_col <- names(df)[tolower(names(df)) %in% c("date/time", "datetime", "date time", "timestamp")]
+    if (length(dt_col) == 1) names(df)[names(df) == dt_col] <- "Date/Time"
+  }
+
+  df %>%
+    mutate(
+      `Date/Time` = parse_date_time(
+        `Date/Time`,
+        orders = c("mdy HMS", "mdy HM", "ymd HMS", "ymd HM", "ymd", "mdy"),
+        tz = "UTC"
+      ),
+      `Bugs - Unscheduled` = suppressWarnings(as.numeric(`Bugs - Unscheduled`)),
+      `Bugs - Ready for Development` = suppressWarnings(as.numeric(`Bugs - Ready for Development`)),
+      `In Development` = suppressWarnings(as.numeric(`In Development`)),
+      `Ready for Review` = suppressWarnings(as.numeric(`Ready for Review`)),
+      `In QA` = suppressWarnings(as.numeric(`In QA`))
+    ) %>%
+    filter(!is.na(`Date/Time`)) %>%
+    arrange(`Date/Time`)
+}
+```
+
+```{r, include=FALSE}
+auto_timer <- reactiveTimer(10 * 60 * 1000)
+
+bugs_data <- reactive({
+  auto_timer()
+  read_bugs() %>% clean_bugs()
+})
+
+qa_state_data <- reactive({
+  auto_timer()
+  read_qa_snapshots() %>% clean_qa_snapshots()
+})
+
+# New: completed work data (monthly completed tickets by type)
+completed_work_data <- reactive({
+  auto_timer()
+
+  bind_rows(
+    clean_completed(read_bugs(), "Bug"),
+    clean_completed(read_features(), "Feature"),
+    clean_completed(read_chores(), "Chore")
+  ) %>%
+    mutate(Story_Points = replace_na(Story_Points, 0))
+})
+```
+
+Monthly Bugs
+=====================================
+
+Row
+-------------------------------------
+
+###
+
+```{r}
+renderPlotly({
+  end_month   <- floor_date(Sys.Date(), "month")
+  start_month <- end_month %m-% months(11)
+
+  month_seq  <- seq.Date(start_month, end_month, by = "1 month")
+
+  df <- bugs_data() %>%
+    mutate(
+      Month = floor_date(`Created At`, "month"),
+      Severity = factor(normalize_severity(Severity), levels = severity_levels)
+    ) %>%
+    filter(Month >= start_month, Month <= end_month)
+
+  validate(need(nrow(df) > 0, "No bugs found in the last 12 months."))
+
+  agg <- df %>%
+    count(Month, Severity, name = "n") %>%
+    complete(Month = month_seq, Severity = severity_levels, fill = list(n = 0)) %>%
+    arrange(Month, Severity)
+
+  plt <- plot_ly()
+
+  for (sev in severity_levels) {
+    d <- agg %>% filter(Severity == sev)
+
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~n,
+        type = "scatter",
+        mode = "lines",
+        line = list(width = 0.5),
+        stackgroup = "one",
+        name = sev,
+        fillcolor = SEVERITY_COLORS[[sev]],
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Bugs: %{y}<br>",
+          "Severity: ", sev,
+          "<extra></extra>"
+        )
+      )
+  }
+
+  plt %>%
+    layout(
+      title = plotly_title("Monthly Bugs by Severity (Last 12 Months)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        tick0 = format(start_month, "%Y-%m-%d"),
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(showgrid = TRUE, gridcolor = "#333333"),
+      legend = list(
+      font = list(color = "#ffffff")
+      )
+    )
+})
+```
+
+Row
+-------------------------------------
+###
+
+```{r}
+renderPlotly({
+  end_month   <- floor_date(Sys.Date(), "month")
+  start_month <- end_month %m-% months(11)
+
+  month_seq <- seq.Date(start_month, end_month, by = "1 month")
+
+  df <- bugs_data() %>%
+    mutate(Month = floor_date(`Created At`, "month")) %>%
+    filter(Month >= start_month, Month <= end_month)
+
+  validate(need(nrow(df) > 0, "No bugs found in the last 12 months."))
+
+  product_levels <- sort(unique(df$Product))
+
+  product_colors <- setNames(
+    scales::hue_pal(l = 65, c = 80)(length(product_levels)),
+    product_levels
+  )
+  if ("Unspecified" %in% names(product_colors)) {
+    product_colors["Unspecified"] <- "#777777"
+  }
+
+  agg <- df %>%
+    count(Month, Product, name = "n") %>%
+    complete(Month = month_seq, Product = product_levels, fill = list(n = 0)) %>%
+    arrange(Month, Product)
+
+  plt <- plot_ly()
+
+  for (prod in product_levels) {
+    d <- agg %>% filter(Product == prod)
+
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~n,
+        type = "scatter",
+        mode = "lines",
+        line = list(width = 0.5),
+        stackgroup = "one",
+        name = prod,
+        fillcolor = product_colors[[prod]],
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Bugs: %{y}<br>",
+          "Product: ", prod,
+          "<extra></extra>"
+        )
+      )
+  }
+
+  plt %>%
+    layout(
+      title = plotly_title("Monthly Bugs by Product (Last 12 Months)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        tick0 = format(start_month, "%Y-%m-%d"),
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(showgrid = TRUE, gridcolor = "#333333"),
+      legend = list(
+      font = list(color = "#ffffff")
+      )
+    )
+})
+```
+
+Bug Hierarchy
+=====================================
+
+###
+```{r}
+renderPlotly({
+  end_month   <- floor_date(Sys.Date(), "month")
+  start_month <- end_month %m-% months(11)
+  month_seq   <- seq.Date(start_month, end_month, by = "1 month")
+
+  df <- bugs_data() %>%
+    mutate(Month = floor_date(`Created At`, "month")) %>%
+    filter(Month >= start_month, Month <= end_month)
+
+  validate(need(nrow(df) > 0, "No bugs found in the last 12 months."))
+
+  agg <- df %>%
+    count(Month, Hierarchy_Type, name = "n") %>%
+    complete(Month = month_seq, Hierarchy_Type = names(HIERARCHY_COLORS), fill = list(n = 0)) %>%
+    arrange(Month, Hierarchy_Type)
+
+  plt <- plot_ly()
+
+  for (htype in names(HIERARCHY_COLORS)) {
+    d <- agg %>% filter(Hierarchy_Type == htype)
+
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~n,
+        type = "scatter",
+        mode = "lines",
+        line = list(width = 0.5),
+        stackgroup = "one",
+        name = htype,
+        fillcolor = HIERARCHY_COLORS[[htype]],
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Bugs: %{y}<br>",
+          "Type: ", htype,
+          "<extra></extra>"
+        )
+      )
+  }
+
+  plt %>%
+    layout(
+      title = plotly_title("Monthly Bugs: Sub-task vs Regular (Last 12 Months)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(title = "Total Created Bugs", showgrid = TRUE, gridcolor = "#333333"),
+      legend = list(font = list(color = "#ffffff"))
+    )
+})
+```
+
+
+
+Completed Tickets {data-orientation=rows data-vertical_layout=scroll}
+=====================================
+
+Row {data-height=650}
+-------------------------------------
+###
+```{r}
+renderPlotly({
+  end_month   <- floor_date(Sys.Date(), "month")
+  start_month <- end_month %m-% months(11)
+  month_seq   <- seq.Date(start_month, end_month, by = "1 month")
+
+  df <- completed_work_data() %>%
+    filter(Month >= start_month, Month <= end_month)
+
+  validate(need(nrow(df) > 0, "No completed tickets found (no Completed At dates in the selected ranges)."))
+
+  agg <- df %>%
+    count(Month, Type, name = "Completed") %>%
+    complete(Month = month_seq, Type = names(WORKTYPE_COLORS), fill = list(Completed = 0)) %>%
+    arrange(Month, Type)
+
+  plt <- plot_ly()
+
+  for (t in names(WORKTYPE_COLORS)) {
+    d <- agg %>% filter(Type == t)
+
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~Completed,
+        type = "bar",
+        name = t,
+        marker = list(color = WORKTYPE_COLORS[[t]]),
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Type: ", t, "<br>",
+          "Completed: %{y}<extra></extra>"
+        )
+      )
+  }
+
+  plt %>%
+    layout(
+      barmode = "stack",
+      title = plotly_title("Completed Tickets by Type (Last 12 Months)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      margin = list(b = 60), # Added to match the other tab
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        tick0 = format(start_month, "%Y-%m-%d"),
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(
+        title = "Completed Tickets",
+        showgrid = TRUE,
+        gridcolor = "#333333",
+        rangemode = "tozero"
+      ),
+      legend = list(orientation = "h", x = 0.02, y = -0.15) # Updated to match
+    ) 
+})
+```
+
+Row {data-height=650}
+-------------------------------------
+###
+```{r}
+renderPlotly({
+  end_month   <- floor_date(Sys.Date(), "month")
+  start_month <- end_month %m-% months(11)
+  month_seq   <- seq.Date(start_month, end_month, by = "1 month")
+
+  df <- completed_work_data() %>%
+    filter(Month >= start_month, Month <= end_month)
+
+  validate(need(nrow(df) > 0, "No completed tickets found."))
+
+  agg <- df %>%
+    group_by(Month, Type) %>%
+    summarise(Story_Points = sum(Story_Points, na.rm = TRUE), .groups = "drop") %>%
+    complete(Month = month_seq, Type = names(WORKTYPE_COLORS), fill = list(Story_Points = 0)) %>%
+    arrange(Month, Type)
+
+  plt <- plot_ly()
+
+  for (t in names(WORKTYPE_COLORS)) {
+    d <- agg %>% filter(Type == t)
+
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~Story_Points,
+        type = "bar",
+        name = t,
+        marker = list(color = WORKTYPE_COLORS[[t]])
+      )
+  }
+
+  plt %>%
+    layout(
+      barmode = "stack",
+      title = plotly_title("Completed Story Points by Type (Last 12 Months)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      margin = list(b = 60), # Added to match
+      xaxis = list(type = "date", tickformat = "%Y-%b", dtick = "M1"),
+      yaxis = list(title = "Story Points Completed", rangemode = "tozero"),
+      legend = list(orientation = "h", x = 0.02, y = -0.15) # Updated to match
+    ) 
+})
+```
+
+Completed % {data-orientation=rows data-vertical_layout=scroll}
+=====================================
+
+Row {data-height=650}
+-------------------------------------
+###
+
+```{r}
+renderPlotly({
+  end_month   <- floor_date(Sys.Date(), "month")
+  start_month <- end_month %m-% months(11)
+  month_seq   <- seq.Date(start_month, end_month, by = "1 month")
+
+  df <- completed_work_data() %>%
+    filter(Month >= start_month, Month <= end_month)
+
+  validate(need(nrow(df) > 0, "No completed tickets found."))
+
+  agg <- df %>%
+    count(Month, Type, name = "Count") %>%
+    complete(Month = month_seq, Type = names(WORKTYPE_COLORS), fill = list(Count = 0)) %>%
+    group_by(Month) %>%
+    mutate(
+      Total = sum(Count),
+      Percent = if_else(Total == 0, 0, Count / Total)
+    ) %>%
+    ungroup() %>%
+    arrange(Month, Type)
+
+  plt <- plot_ly()
+
+  for (t in names(WORKTYPE_COLORS)) {
+    d <- agg %>% filter(Type == t)
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~Percent,
+        type = "bar",
+        name = t,
+        marker = list(color = WORKTYPE_COLORS[[t]]),
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Type: ", t, "<br>",
+          "Share: %{y:.1%}<br>",
+          "Count: %{customdata} tickets",
+          "<extra></extra>"
+        ),
+        customdata = ~Count
+      )
+  }
+
+  plt %>%
+    layout(
+      barmode = "stack",
+      title = plotly_title("Distribution of Completed Work (Monthly %)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      margin = list(b = 60), # Added margin for spacing near legend
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        tick0 = format(start_month, "%Y-%m-%d"),
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(
+        title = "Percentage of Total",
+        tickformat = ".0%",
+        showgrid = TRUE,
+        gridcolor = "#333333",
+        range = c(0, 1)
+      ),
+      legend = list(orientation = "h", x = 0.02, y = -0.15)
+    ) 
+})
+```
+
+
+Row {data-height=650}
+-------------------------------------
+###
+```{r}
+renderPlotly({
+  end_month   <- floor_date(Sys.Date(), "month")
+  start_month <- end_month %m-% months(11)
+  month_seq   <- seq.Date(start_month, end_month, by = "1 month")
+
+  df <- completed_work_data() %>%
+    filter(Month >= start_month, Month <= end_month)
+
+  validate(need(nrow(df) > 0, "No completed tickets found."))
+
+  agg <- df %>%
+    group_by(Month, Type) %>%
+    summarise(Points = sum(Story_Points, na.rm = TRUE), .groups = "drop") %>%
+    complete(Month = month_seq, Type = names(WORKTYPE_COLORS), fill = list(Points = 0)) %>%
+    group_by(Month) %>%
+    mutate(
+      Total = sum(Points),
+      Percent = if_else(Total == 0, 0, Points / Total)
+    ) %>%
+    ungroup() %>%
+    arrange(Month, Type)
+
+  plt <- plot_ly()
+
+  for (t in names(WORKTYPE_COLORS)) {
+    d <- agg %>% filter(Type == t)
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~Percent,
+        type = "bar",
+        name = t,
+        marker = list(color = WORKTYPE_COLORS[[t]]),
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Type: ", t, "<br>",
+          "Share: %{y:.1%}<br>",
+          "Points: %{customdata}",
+          "<extra></extra>"
+        ),
+        customdata = ~Points
+      )
+  }
+
+  plt %>%
+    layout(
+      barmode = "stack",
+      title = plotly_title("Distribution of Story Points (Monthly %)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      margin = list(b = 60), # Added margin
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        tick0 = format(start_month, "%Y-%m-%d"),
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(
+        title = "Percentage of Total Points",
+        tickformat = ".0%", 
+        showgrid = TRUE,
+        gridcolor = "#333333",
+        range = c(0, 1)
+      ),
+      legend = list(orientation = "h", x = 0.02, y = -0.15)
+    ) 
+})
+```
+
+
+
+Bug Backlog
+=====================================
+
+###
+
+```{r}
+renderPlotly({
+  df <- bugs_data()
+
+  if ("Story Type" %in% names(df)) {
+    df <- df %>% filter(tolower(`Story Type`) == "bug")
+  }
+
+  if ("State" %in% names(df)) {
+    df <- df %>% filter(State %in% c("Unscheduled", "Ready for Development"))
+  }
+
+  df <- df %>%
+    mutate(
+      Severity = factor(normalize_severity(Severity), levels = severity_levels),
+      Product  = if_else(is.na(Product) | Product == "", "Unspecified", str_trim(Product))
+    )
+
+  validate(need(nrow(df) > 0, "No backlog bugs found."))
+
+  agg <- df %>% count(Product, Severity, name = "n")
+
+  p <- ggplot(agg, aes(x = Product, y = n, fill = Severity)) +
+    geom_col(width = 0.7) +
+    scale_fill_manual(values = SEVERITY_COLORS, drop = FALSE) +
+    labs(
+      title = "Bug Backlog by Product",
+      x = NULL,
+      y = "Open Bugs"
+    ) +
+    BASE_THEME
+
+  ggplotly(p, tooltip = c("x", "fill", "y")) %>%
+    layout(
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      legend = list(orientation = "h", x = 0.2, y = -0.2)
+    )
+})
+```
+
+Critical/High
+=====================================
+
+Row {data-height=440}
+-------------------------------------
+
+### Backlog Bugs (Severity 0–1)
+
+```{r}
+renderReactable({
+  df <- bugs_data()
+
+  if ("Story Type" %in% names(df)) {
+    df <- df %>% filter(tolower(`Story Type`) == "bug")
+  }
+
+  if ("State" %in% names(df)) {
+    df <- df %>% filter(State %in% c("Unscheduled", "Ready for Development"))
+  }
+
+  df <- df %>%
+    mutate(
+      Severity = normalize_severity(Severity),
+      Severity = factor(Severity, levels = severity_levels)
+    ) %>%
+    filter(Severity %in% c("S0 - Critical", "S1 - High")) %>%
+    select(`Ticket ID`, Name, Severity, Product, State) %>%
+    arrange(factor(Severity, levels = c("S0 - Critical", "S1 - High")), Product, State)
+
+  validate(need(nrow(df) > 0, "No S0/S1 backlog bugs found."))
+
+  reactable(
+    df,
+    theme = REACTABLE_THEME_DARK,
+    searchable = FALSE,
+    pagination = TRUE,
+    defaultPageSize = 10,
+    highlight = TRUE,
+    bordered = TRUE,
+    compact = TRUE,
+    defaultColDef = colDef(vAlign = "top"),
+    columns = list(
+      `Ticket ID` = colDef(width = 90),
+      Name        = colDef(minWidth = 520, style = list(whiteSpace = "normal")),
+      Severity    = colDef(width = 130, cell = function(value) severity_badge(value)),
+      Product     = colDef(width = 150),
+      State       = colDef(width = 190)
+    )
+  )
+})
+```
+
+Row {data-height=560}
+-------------------------------------
+
+### Backlog Bugs Older Than 6 Months
+
+```{r}
+renderReactable({
+  cutoff <- lubridate::floor_date(Sys.time(), unit = "day") %m-% months(6)
+
+  df <- bugs_data()
+
+  if ("Story Type" %in% names(df)) {
+    df <- df %>% filter(tolower(`Story Type`) == "bug")
+  }
+
+  if ("State" %in% names(df)) {
+    df <- df %>% filter(State %in% c("Unscheduled", "Ready for Development"))
+  }
+
+  df <- df %>%
+    mutate(
+      Severity = normalize_severity(Severity),
+      Severity = factor(Severity, levels = severity_levels)
+    ) %>%
+    filter(!is.na(`Created At`), `Created At` < cutoff) %>%
+    mutate(Age_Days = as.integer(difftime(Sys.time(), `Created At`, units = "days"))) %>%
+    select(`Ticket ID`, Name, Severity, Product, State, `Created At`, Age_Days) %>%
+    arrange(desc(Age_Days))
+
+  validate(need(nrow(df) > 0, "No backlog bugs older than 6 months found."))
+
+  reactable(
+    df,
+    theme = REACTABLE_THEME_DARK,
+    searchable = FALSE,
+    pagination = TRUE,
+    defaultPageSize = 10,
+    highlight = TRUE,
+    bordered = TRUE,
+    compact = TRUE,
+    defaultSorted = "Age_Days",
+    defaultSortOrder = "desc",
+    defaultColDef = colDef(vAlign = "top"),
+    columns = list(
+      `Ticket ID`  = colDef(width = 90),
+      Name         = colDef(minWidth = 520, style = list(whiteSpace = "normal")),
+      Severity     = colDef(width = 130, cell = function(value) severity_badge(value)),
+      Product      = colDef(width = 150),
+      State        = colDef(width = 190),
+      `Created At` = colDef(
+        width = 170,
+        cell = function(value) if (is.na(value)) "" else format(value, "%Y-%m-%d")
+      ),
+      Age_Days     = colDef(width = 110)
+    )
+  )
+})
+```
+
+In QA
+=====================================
+
+Row
+-------------------------------------
+
+###
+
+```{r}
+renderPlotly({
+  # Filter data first
+  df <- qa_state_data() %>%
+    filter(!is.na(`Date/Time`)) %>%
+    arrange(`Date/Time`)
+
+  validate(need(nrow(df) > 0, "No valid snapshot rows found."))
+
+  # --- NEW COLOR DEFINITIONS ---
+  # Blue for Dev, Orange for Review, Green for QA
+  col_dev     <- "#5bc0de" 
+  col_review  <- "#f0ad4e"
+  col_qa      <- "#5cb85c"
+
+  # --- NEW PLOTTING LOGIC ---
+  plot_ly(data = df, x = ~`Date/Time`) %>%
+    # Trace 1: In Development (Column D)
+    add_trace(
+      y = ~`In Development`,
+      name = "In Development",
+      type = "scatter",
+      mode = "lines+markers",
+      line = list(color = col_dev, width = 3),
+      marker = list(color = col_dev, size = 5),
+      hovertemplate = paste0(
+        "%{x|%Y-%m-%d %H:%M:%S}<br>",
+        "In Development: %{y}<extra></extra>"
+      )
+    ) %>%
+    # Trace 2: Ready for Review (Column E)
+    add_trace(
+      y = ~`Ready for Review`,
+      name = "Ready for Review",
+      type = "scatter",
+      mode = "lines+markers",
+      line = list(color = col_review, width = 3),
+      marker = list(color = col_review, size = 5),
+      hovertemplate = paste0(
+        "%{x|%Y-%m-%d %H:%M:%S}<br>",
+        "Ready for Review: %{y}<extra></extra>"
+      )
+    ) %>%
+    # Trace 3: In QA (Column F)
+    add_trace(
+      y = ~`In QA`,
+      name = "In QA",
+      type = "scatter",
+      mode = "lines+markers",
+      line = list(color = col_qa, width = 3),
+      marker = list(color = col_qa, size = 5),
+      hovertemplate = paste0(
+        "%{x|%Y-%m-%d %H:%M:%S}<br>",
+        "In QA: %{y}<extra></extra>"
+      )
+    ) %>%
+    layout(
+      title = plotly_title("Work in Progress: Dev, Review, QA"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(type = "date", showgrid = TRUE, gridcolor = "#333333"),
+      yaxis = list(
+        title = "Ticket Count",
+        type = "linear",
+        showgrid = TRUE,
+        gridcolor = "#333333",
+        rangemode = "tozero"
+      ),
+      # Add Legend at bottom center
+      legend = list(
+        orientation = "h", 
+        x = 0.5, 
+        y = -0.15,
+        xanchor = "center"
+      )
+    )
+})
+```
+
+Backlog Bugs
+=====================================
+
+Row
+-------------------------------------
+
+###
+
+```{r}
+renderPlotly({
+  df <- qa_state_data() %>%
+    mutate(
+      backlog_total = coalesce(`Bugs - Unscheduled`, 0) +
+        coalesce(`Bugs - Ready for Development`, 0)
+    )
+
+  validate(need(nrow(df) > 0, "No snapshot rows found."))
+  validate(need(!all(is.na(df$backlog_total)), "Backlog columns are missing or empty."))
+
+  plot_ly(
+    data = df,
+    x = ~`Date/Time`,
+    y = ~backlog_total,
+    type = "scatter",
+    mode = "lines+markers",
+    line = list(width = 3),
+    marker = list(size = 5),
+    hovertemplate = paste0(
+      "%{x|%Y-%m-%d %H:%M:%S}<br>",
+      "Total Backlog Bugs: %{y}<extra></extra>"
+    )
+  ) %>%
+    layout(
+      title = plotly_title("Total Backlog Bugs Over Time"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(
+        type = "date",
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(
+        title = "Total Backlog Bugs",
+        showgrid = TRUE,
+        gridcolor = "#333333",
+        rangemode = "tozero"
+      )
+    )
+})
+```
