@@ -4,7 +4,7 @@
   "platform": "4.5.2",
   "metadata": {
     "appmode": "rmd-shiny",
-    "primary_rmd": "automation_runs_dashboard.Rmd",
+    "primary_rmd": "shortcut-bugs-dashboard-static.Rmd",
     "primary_html": null,
     "content_category": null,
     "has_parameters": false
