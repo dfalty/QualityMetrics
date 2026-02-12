@@ -6,7 +6,7 @@
     "appmode": "rmd-shiny",
     "primary_rmd": "shortcut-bugs-dashboard-static.Rmd",
     "primary_html": null,
-    "content_category": null,
+    "content_category": "document",
     "has_parameters": false
   },
   "packages": {
