@@ -30,9 +30,11 @@ SHORTCUT_TICKETS <- Sys.getenv("SHORTCUT_TICKETS", unset = "")
 SHORTCUT_TICKETS_TAB_BUGS <- Sys.getenv("SHORTCUT_TICKETS_TAB_BUGS", unset = "Bugs")
 SHORTCUT_TICKETS_TAB_FEATURES <- Sys.getenv("SHORTCUT_TICKETS_TAB_FEATURES", unset = "Features")
 SHORTCUT_TICKETS_TAB_CHORES <- Sys.getenv("SHORTCUT_TICKETS_TAB_CHORES", unset = "Chores")
+SHORTCUT_TICKETS_TAB_RELEASES <- Sys.getenv("SHORTCUT_TICKETS_TAB_RELEASES", unset = "Releases")
 SHORTCUT_TICKETS_TAB_BUGS_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_BUGS_RANGE", unset = "A:I")
 SHORTCUT_TICKETS_TAB_FEATURES_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_FEATURES_RANGE", unset = "A:H")
 SHORTCUT_TICKETS_TAB_CHORES_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_CHORES_RANGE", unset = "A:H")
+SHORTCUT_TICKETS_TAB_RELEASES_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_RELEASES_RANGE", unset = "A:C")
 
 TIME_DATA_SHEET_ID <- Sys.getenv("TIME_DATA_SHEET_ID", unset = "")
 TIME_DATA_SHEET_TAB <- Sys.getenv("TIME_DATA_SHEET_TAB", unset = "State")
@@ -209,6 +211,15 @@ read_chores <- function() {
   )
 }
 
+read_releases <- function() {
+  googlesheets4::read_sheet(
+    ss = SHORTCUT_TICKETS,
+    sheet = SHORTCUT_TICKETS_TAB_RELEASES,
+    range = SHORTCUT_TICKETS_TAB_RELEASES_RANGE,
+    col_types = "c"
+  )
+}
+
 # ---------- Cleaners ----------
 clean_bugs <- function(df) {
   df %>%
@@ -253,6 +264,26 @@ read_qa_snapshots <- function() {
   )
 }
 
+clean_releases <- function(df) {
+  date_col <- names(df)[tolower(names(df)) == "date"][1]
+  type_col <- names(df)[tolower(names(df)) == "type"][1]
+  if (is.na(date_col) || is.na(type_col)) return(tibble(Date = as.Date(character()), Type = character()))
+
+  df %>%
+    mutate(
+      Date = parse_date_time(
+        as.character(.data[[date_col]]),
+        orders = c("mdy", "ymd", "mdy HMS", "ymd HMS", "mdy HM", "ymd HM"),
+        tz = "UTC"
+      ),
+      Date = as.Date(Date),
+      Type = stringr::str_trim(as.character(.data[[type_col]]))
+    ) %>%
+    filter(!is.na(Date), !is.na(Type)) %>%
+    filter(tolower(Type) == "hotfix") %>%
+    select(Date, Type)
+}
+
 clean_qa_snapshots <- function(df) {
   if (!("Date/Time" %in% names(df))) {
     dt_col <- names(df)[tolower(names(df)) %in% c("date/time", "datetime", "date time", "timestamp")]
@@ -295,9 +326,11 @@ auth_gs()
 BUGS_RAW     <- read_bugs()
 FEATURES_RAW <- read_features()
 CHORES_RAW   <- read_chores()
+RELEASES_RAW <- tryCatch(read_releases(), error = function(e) tibble(Date = character(), Type = character()))
 QA_RAW       <- read_qa_snapshots()
 
 BUGS_DATA     <- BUGS_RAW %>% clean_bugs()
+RELEASES_DATA <- RELEASES_RAW %>% clean_releases()
 QA_STATE_DATA <- QA_RAW %>% clean_qa_snapshots()
 
 COMPLETED_WORK_DATA <- bind_rows(
@@ -621,6 +654,75 @@ if (nrow(df) == 0) {
       ),
       yaxis = list(title = "Total Created Bugs", showgrid = TRUE, gridcolor = "#333333"),
       legend = list(font = list(color = "#ffffff"))
+    )
+}
+```
+
+Hotfixes
+=====================================
+
+Row
+-------------------------------------
+
+###
+
+```{r hotfix_counts_by_month}
+end_month   <- floor_date(Sys.Date(), "month")
+start_month <- make_date(year(Sys.Date()), 1, 1)
+month_seq   <- seq.Date(start_month, end_month, by = "1 month")
+
+df <- RELEASES_DATA %>%
+  mutate(Month = floor_date(Date, "month")) %>%
+  filter(Month >= start_month, Month <= end_month)
+
+if (nrow(df) == 0) {
+  plotly_empty(type = "scatter") %>%
+    layout(
+      title = plotly_title("Hotfix Counts by Month (YTD)"),
+      annotations = list(
+        text = "No hotfix data in this period",
+        xref = "paper", yref = "paper",
+        x = 0.5, y = 0.5, showarrow = FALSE,
+        font = list(color = "#aaaaaa")
+      )
+    )
+} else {
+  agg <- df %>%
+    count(Month, name = "Hotfixes") %>%
+    right_join(tibble(Month = month_seq), by = "Month") %>%
+    mutate(Hotfixes = replace_na(Hotfixes, 0)) %>%
+    arrange(Month)
+
+  plot_ly(
+    data = agg,
+    x = ~Month,
+    y = ~Hotfixes,
+    type = "scatter",
+    mode = "lines+markers",
+    line = list(color = "#D55E00", width = 3, shape = "spline", smoothing = 0.4),
+    marker = list(color = "#D55E00", size = 8),
+    hovertemplate = paste0(
+      "Month: %{x|%Y-%b}<br>",
+      "Hotfixes: %{y}<extra></extra>"
+    )
+  ) %>%
+    layout(
+      title = plotly_title("Hotfix Counts by Month (YTD)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(
+        title = "Number of Hotfixes",
+        showgrid = TRUE,
+        gridcolor = "#333333",
+        rangemode = "tozero"
+      )
     )
 }
 ```
