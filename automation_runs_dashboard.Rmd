@@ -27,6 +27,7 @@ GOOGLE_SA_JSON <- Sys.getenv("GOOGLE_SA_JSON", unset = "")
 GOOGLE_SA_JSON_PATH <- Sys.getenv("GOOGLE_SA_JSON_PATH", unset = "")
 AUTOMATION_SHEET_ID <- Sys.getenv("AUTOMATION_SHEET_ID", unset = "")
 AUTOMATION_SHEET_TAB <- Sys.getenv("AUTOMATION_SHEET_TAB", unset = "UI")
+RELEASE_DEPLOYMENT_SHEET_TAB <- Sys.getenv("RELEASE_DEPLOYMENT_SHEET_TAB", unset = "Release Deployment")
 RUNS_SHEET_RANGE <- Sys.getenv("RUNS_SHEET_RANGE", unset = "A:D")
 RUNS_TZ <- Sys.getenv("RUNS_TZ", unset = "UTC")
 
@@ -119,6 +120,37 @@ clean_runs <- function(df) {
 
 runs_data <- read_runs() %>% clean_runs()
 latest_run_at <- max(runs_data$Date, na.rm = TRUE)
+
+# Release Deployment data (separate tab)
+read_release_deployment_runs <- function() {
+  auth_gs()
+  googlesheets4::read_sheet(
+    ss = AUTOMATION_SHEET_ID,
+    sheet = RELEASE_DEPLOYMENT_SHEET_TAB,
+    range = RUNS_SHEET_RANGE,
+    col_types = "cccc"
+  )
+}
+
+clean_release_runs <- function(df) {
+  df %>%
+    rename_with(~str_trim(.x)) %>%
+    mutate(
+      Date = parse_date_time(
+        Date,
+        orders = c("ymd HMS", "mdy HMS", "ymd HM", "mdy HM", "ymd", "mdy"),
+        tz = RUNS_TZ
+      ),
+      Result = str_to_title(str_trim(Result)),
+      Run_Day = as_date(Date)
+    ) %>%
+    filter(!is.na(Date), Result %in% c("Pass", "Fail"))
+}
+
+release_deployment_data <- tryCatch(
+  read_release_deployment_runs() %>% clean_release_runs(),
+  error = function(e) tibble(Date = as.POSIXct(character()), Result = character(), Run_Day = as.Date(character()))
+)
 ```
 
 Automation Runs
@@ -326,6 +358,54 @@ p <- ggplot(
 ggplotly(p, tooltip = "text") %>%
   layout(
     title = plotly_title("Average Passing Rate per Week"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    yaxis = list(tickformat = ".0%")
+  ) %>%
+  add_plotly_border()
+```
+
+Release Deployment
+=====================================
+
+Row
+-------------------------------------
+
+###
+```{r release_deployment_monthly_pass_rate}
+monthly_release_df <- release_deployment_data %>%
+  group_by(
+    Month = floor_date(Run_Day, "month")
+  ) %>%
+  summarise(
+    Total = n(),
+    Passed = sum(Result == "Pass"),
+    Avg_Pass_Rate = Passed / Total,
+    .groups = "drop"
+  ) %>%
+  arrange(Month)
+
+p <- ggplot(
+  monthly_release_df,
+  aes(
+    Month,
+    Avg_Pass_Rate,
+    group = 1,
+    text = paste0(
+      "Month: ", format(Month, "%b %Y"),
+      "<br>Avg Pass Rate: ", scales::percent(Avg_Pass_Rate, accuracy = 0.1)
+    )
+  )
+) +
+  geom_line(color = "#5bc0de", linewidth = 1) +
+  geom_point(color = "#5bc0de", size = 2) +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(x = NULL, y = "Average Pass Rate") +
+  BASE_THEME
+
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    title = plotly_title("Release Deployment: Average Pass Rate per Month"),
     plot_bgcolor = "#1f1f1f",
     paper_bgcolor = "#1f1f1f",
     yaxis = list(tickformat = ".0%")
