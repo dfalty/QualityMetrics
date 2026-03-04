@@ -341,9 +341,10 @@ COMPLETED_WORK_DATA <- bind_rows(
   mutate(Story_Points = replace_na(Story_Points, 0))
 ```
 
-Monthly Bugs
+Bugs:Product
 =====================================
 
+<!--  
 Row
 -------------------------------------
 
@@ -419,7 +420,7 @@ if (nrow(df) == 0) {
     )
 }
 ```
-
+-->
 Row
 -------------------------------------
 ###
@@ -491,10 +492,10 @@ if (nrow(df) == 0) {
 }
 ```
 
-Weekly Bugs
-=====================================
-
+Row
+-------------------------------------
 ###
+
 ```{r weekly_bugs_product_final_hover}
 library(plotly)
 library(dplyr)
@@ -727,7 +728,7 @@ if (nrow(df) == 0) {
 }
 ```
 
-Completed Tickets {data-orientation=rows data-vertical_layout=scroll}
+Completed {data-orientation=rows data-vertical_layout=scroll}
 =====================================
 
 Row {data-height=650}
@@ -999,6 +1000,7 @@ if (nrow(df) == 0) {
 }
 ```
 
+<!--  
 Bug Backlog
 =====================================
 
@@ -1045,6 +1047,8 @@ if (nrow(df) == 0) {
     )
 }
 ```
+
+-->
 
 Critical/High
 =====================================
