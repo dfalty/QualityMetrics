@@ -1052,9 +1052,12 @@ Critical/High
 Row {data-height=440}
 -------------------------------------
 
-### Backlog Bugs (Severity 0–1)
+### Severity 0–1 Bugs in (Unscheduled/Ready for Development) OR Open > 1 Week
 
 ```{r}
+week_cutoff <- lubridate::floor_date(Sys.time(), unit = "day") - lubridate::days(7)
+closed_states <- c("done", "closed", "completed", "complete")
+
 df <- BUGS_DATA
 
 # Defensive cleaning for filtering
@@ -1064,19 +1067,32 @@ df <- df %>%
     State = if ("State" %in% names(.)) stringr::str_trim(as.character(State)) else NA_character_,
     Severity_raw = normalize_severity(Severity),
     Severity_raw = stringr::str_trim(as.character(Severity_raw)),
-    Product = if_else(is.na(Product) | Product == "", "Unspecified", str_trim(Product))
-  )
+    Product = if_else(is.na(Product) | Product == "", "Unspecified", str_trim(Product)),
+    Age_Days = as.integer(difftime(Sys.time(), `Created At`, units = "days"))
+  ) %>%
+  filter(stringr::str_detect(Severity_raw, "^S[01]\\b"))
 
-# Backlog states (case/whitespace tolerant)
-if ("State" %in% names(df)) {
-  df <- df %>% filter(tolower(State) %in% c("unscheduled", "ready for development"))
+# Set A: All Sev 0/1 in Unscheduled or Ready for Development (any age)
+set_a <- df
+if ("State" %in% names(set_a)) {
+  set_a <- set_a %>% filter(tolower(State) %in% c("unscheduled", "ready for development"))
 }
 
-# Severity 0–1 (tolerant: any S0/S1 prefix)
-df <- df %>%
-  filter(stringr::str_detect(Severity_raw, "^S[01]\\b")) %>%
-  select(`Ticket ID`, Name, Severity = Severity_raw, Product, State) %>%
-  arrange(factor(Severity, levels = c("S0 - Critical", "S1 - High")), Product, State)
+# Set B: Sev 0/1 that are open (not closed) and older than 1 week
+set_b <- df %>%
+  filter(
+    !is.na(`Created At`),
+    `Created At` < week_cutoff
+  )
+if ("State" %in% names(set_b)) {
+  set_b <- set_b %>% filter(is.na(State) | !tolower(State) %in% closed_states)
+}
+
+# Union (distinct by Ticket ID)
+df <- bind_rows(set_a, set_b) %>%
+  distinct(`Ticket ID`, .keep_all = TRUE) %>%
+  select(`Ticket ID`, Name, Severity = Severity_raw, Product, State, `Created At`, Age_Days) %>%
+  arrange(factor(Severity, levels = c("S0 - Critical", "S1 - High")), desc(Age_Days), Product, State)
 
 if (nrow(df) == 0) {
   cat("No S0/S1 backlog bugs found.")
@@ -1090,13 +1106,20 @@ if (nrow(df) == 0) {
     highlight = TRUE,
     bordered = TRUE,
     compact = TRUE,
+    defaultSorted = "Age_Days",
+    defaultSortOrder = "desc",
     defaultColDef = colDef(vAlign = "top"),
     columns = list(
-      `Ticket ID` = colDef(width = 90),
-      Name        = colDef(minWidth = 520, style = list(whiteSpace = "normal")),
-      Severity    = colDef(width = 130, cell = function(value) severity_badge(value)),
-      Product     = colDef(width = 150),
-      State       = colDef(width = 190)
+      `Ticket ID`  = colDef(width = 90),
+      Name         = colDef(minWidth = 520, style = list(whiteSpace = "normal")),
+      Severity     = colDef(width = 130, cell = function(value) severity_badge(value)),
+      Product      = colDef(width = 150),
+      State        = colDef(width = 190),
+      `Created At` = colDef(
+        width = 170,
+        cell = function(value) if (is.na(value)) "" else format(value, "%Y-%m-%d")
+      ),
+      Age_Days     = colDef(width = 110, name = "Age (days)")
     )
   )
 }
