@@ -271,6 +271,108 @@ ggplotly(p) %>%
   add_plotly_border()
 ```
 
+Operations Load
+=====================================
+
+Row
+-------------------------------------
+
+### 
+
+```{r daily_run_volume}
+df <- runs_data %>%
+  count(Run_Day, Result, name = "Runs") %>%
+  tidyr::complete(Run_Day, Result = c("Pass", "Fail"), fill = list(Runs = 0))
+
+p <- ggplot(
+  df,
+  aes(
+    Run_Day,
+    Runs,
+    fill = Result,
+    text = paste0(
+      "Run Day: ", Run_Day,
+      "<br>Result: ", Result,
+      "<br>Runs: ", Runs
+    )
+  )
+) +
+  geom_col(width = 0.85) +
+  scale_fill_manual(values = c("Pass" = "#009E73", "Fail" = "#D55E00")) +
+  labs(x = NULL, y = "Run Count") +
+  BASE_THEME +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    title = plotly_title("Daily Automation Volume (Pass vs Fail)"),
+    barmode = "stack",
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    legend = list(orientation = "h", x = 0.02, y = -0.2)
+  ) %>%
+  add_plotly_border()
+```
+
+Triage Quality
+=====================================
+
+Row
+-------------------------------------
+
+### 
+
+```{r weekly_untriaged_failure_rate}
+df <- runs_data %>%
+  filter(Result == "Fail") %>%
+  mutate(
+    `Failure Attribution` = if_else(
+      is.na(`Failure Attribution`) | str_trim(`Failure Attribution`) == "",
+      "Needs Triage",
+      `Failure Attribution`
+    ),
+    Week = floor_date(Run_Day, "week", week_start = 1)
+  ) %>%
+  group_by(Week) %>%
+  summarise(
+    Failures = n(),
+    Needs_Triage = sum(`Failure Attribution` == "Needs Triage"),
+    Needs_Triage_Rate = if_else(Failures == 0, 0, Needs_Triage / Failures),
+    .groups = "drop"
+  ) %>%
+  arrange(Week)
+
+p <- ggplot(
+  df,
+  aes(
+    Week,
+    Needs_Triage_Rate,
+    text = paste0(
+      "Week of: ", format(Week, "%b %d, %Y"),
+      "<br>Needs Triage: ", scales::percent(Needs_Triage_Rate, accuracy = 0.1),
+      "<br>Failures: ", Failures,
+      "<br>Untriaged Failures: ", Needs_Triage
+    )
+  )
+) +
+  geom_col(fill = "#7F7F7F", width = 5) +
+  geom_hline(yintercept = 0.10, linetype = "dashed", color = "#f0ad4e") +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(x = NULL, y = "% of Failures") +
+  BASE_THEME +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    title = plotly_title("Weekly Share of Failures Still Needing Triage"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    yaxis = list(tickformat = ".0%")
+  ) %>%
+  add_plotly_border()
+```
+
+
 Passing Rate
 =====================================
 
