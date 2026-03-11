@@ -1050,6 +1050,119 @@ if (nrow(df) == 0) {
 
 -->
 
+
+
+Backlog Aging
+=====================================
+
+Row
+-------------------------------------
+
+### Backlog Age by Severity
+
+```{r backlog_age_buckets_by_severity}
+aging_df <- BUGS_DATA
+if ("Story Type" %in% names(aging_df)) {
+  aging_df <- aging_df %>% filter(tolower(stringr::str_trim(as.character(`Story Type`))) == "bug")
+}
+if ("State" %in% names(aging_df)) {
+  aging_df <- aging_df %>% filter(tolower(stringr::str_trim(as.character(State))) %in% c("unscheduled", "ready for development"))
+}
+
+aging_df <- aging_df %>%
+  mutate(
+    Severity = factor(normalize_severity(Severity), levels = severity_levels),
+    Age_Days = as.integer(difftime(Sys.time(), `Created At`, units = "days")),
+    Age_Bucket = case_when(
+      Age_Days <= 7 ~ "0-7 days",
+      Age_Days <= 30 ~ "8-30 days",
+      Age_Days <= 90 ~ "31-90 days",
+      TRUE ~ "90+ days"
+    ),
+    Age_Bucket = factor(Age_Bucket, levels = c("0-7 days", "8-30 days", "31-90 days", "90+ days"))
+  ) %>%
+  filter(!is.na(`Created At`))
+
+if (nrow(aging_df) == 0) {
+  plotly_empty(type = "bar") %>% layout(title = plotly_title("Backlog Age by Severity"))
+} else {
+  agg <- aging_df %>% count(Age_Bucket, Severity, name = "Bugs")
+
+  p <- ggplot(
+    agg,
+    aes(
+      Age_Bucket,
+      Bugs,
+      fill = Severity,
+      text = paste0(
+        "Age Bucket: ", Age_Bucket,
+        "<br>Severity: ", Severity,
+        "<br>Bugs: ", Bugs
+      )
+    )
+  ) +
+    geom_col(width = 0.75) +
+    scale_fill_manual(values = SEVERITY_COLORS, drop = FALSE) +
+    labs(x = NULL, y = "Backlog Bugs") +
+    BASE_THEME
+
+  ggplotly(p, tooltip = "text") %>%
+    layout(
+      title = plotly_title("Backlog Age by Severity"),
+      barmode = "stack",
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      legend = list(orientation = "h", x = 0.02, y = -0.25)
+    ) %>%
+    add_plotly_border()
+}
+```
+
+Row {data-height=520}
+-------------------------------------
+
+### Product Aging Scorecard
+
+```{r backlog_product_aging_scorecard}
+product_aging <- aging_df %>%
+  group_by(Product) %>%
+  summarise(
+    Backlog_Bugs = n(),
+    Critical_High = sum(Severity %in% c("S0 - Critical", "S1 - High"), na.rm = TRUE),
+    Older_Than_30 = sum(Age_Days > 30, na.rm = TRUE),
+    Median_Age_Days = median(Age_Days, na.rm = TRUE),
+    P90_Age_Days = unname(stats::quantile(Age_Days, probs = 0.9, na.rm = TRUE, type = 7)),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Critical_High), desc(Older_Than_30), desc(Median_Age_Days))
+
+if (nrow(product_aging) == 0) {
+  cat("No backlog aging data found.")
+} else {
+  reactable(
+    product_aging,
+    theme = REACTABLE_THEME_DARK,
+    searchable = FALSE,
+    pagination = TRUE,
+    defaultPageSize = 10,
+    highlight = TRUE,
+    bordered = TRUE,
+    compact = TRUE,
+    defaultSorted = c("Critical_High", "Older_Than_30"),
+    defaultSortOrder = "desc",
+    columns = list(
+      Product = colDef(minWidth = 140),
+      Backlog_Bugs = colDef(name = "Backlog", width = 90),
+      Critical_High = colDef(name = "S0/S1", width = 90),
+      Older_Than_30 = colDef(name = ">30d", width = 90),
+      Median_Age_Days = colDef(name = "Median Age", width = 110),
+      P90_Age_Days = colDef(name = "P90 Age", width = 100)
+    )
+  )
+}
+```
+
+
 Critical/High
 =====================================
 
