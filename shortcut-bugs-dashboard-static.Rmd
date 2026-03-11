@@ -1187,6 +1187,122 @@ if (nrow(df) == 0) {
   )
 }
 ```
+
+
+Delivery Flow
+=====================================
+
+Row
+-------------------------------------
+
+### Current Work Distribution
+
+```{r current_work_distribution}
+flow_latest <- QA_STATE_DATA %>%
+  filter(!is.na(`Date/Time`)) %>%
+  arrange(desc(`Date/Time`)) %>%
+  slice(1) %>%
+  transmute(
+    Stage = c("Backlog", "In Development", "Ready for Review", "In QA"),
+    Count = c(
+      coalesce(`Bugs - Unscheduled`, 0) + coalesce(`Bugs - Ready for Development`, 0),
+      coalesce(`In Development`, 0),
+      coalesce(`Ready for Review`, 0),
+      coalesce(`In QA`, 0)
+    )
+  )
+
+if (nrow(flow_latest) == 0) {
+  plotly_empty(type = "bar") %>% layout(title = plotly_title("Current Work Distribution"))
+} else {
+  p <- ggplot(
+    flow_latest,
+    aes(
+      reorder(Stage, Count),
+      Count,
+      fill = Stage,
+      text = paste0(Stage, ": ", Count)
+    )
+  ) +
+    geom_col(width = 0.7, show.legend = FALSE) +
+    coord_flip() +
+    scale_fill_manual(values = c(
+      "Backlog" = "#7F7F7F",
+      "In Development" = "#0072B2",
+      "Ready for Review" = "#E69F00",
+      "In QA" = "#009E73"
+    )) +
+    labs(x = NULL, y = "Tickets") +
+    BASE_THEME
+
+  ggplotly(p, tooltip = "text") %>%
+    layout(
+      title = plotly_title("Current Work Distribution"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f"
+    ) %>%
+    add_plotly_border()
+}
+```
+
+### Flow Mix Over Time
+
+```{r flow_mix_over_time}
+flow_df <- QA_STATE_DATA %>%
+  filter(!is.na(`Date/Time`)) %>%
+  transmute(
+    `Date/Time`,
+    Backlog = coalesce(`Bugs - Unscheduled`, 0) + coalesce(`Bugs - Ready for Development`, 0),
+    `In Development` = coalesce(`In Development`, 0),
+    `Ready for Review` = coalesce(`Ready for Review`, 0),
+    `In QA` = coalesce(`In QA`, 0)
+  ) %>%
+  pivot_longer(-`Date/Time`, names_to = "Stage", values_to = "Count") %>%
+  group_by(`Date/Time`) %>%
+  mutate(Total = sum(Count, na.rm = TRUE), Share = if_else(Total == 0, 0, Count / Total)) %>%
+  ungroup()
+
+if (nrow(flow_df) == 0) {
+  plotly_empty(type = "scatter") %>% layout(title = plotly_title("Flow Mix Over Time"))
+} else {
+  p <- ggplot(
+    flow_df,
+    aes(
+      `Date/Time`,
+      Share,
+      fill = Stage,
+      text = paste0(
+        format(`Date/Time`, "%Y-%m-%d %H:%M"),
+        "<br>Stage: ", Stage,
+        "<br>Share: ", scales::percent(Share, accuracy = 0.1),
+        "<br>Count: ", Count
+      )
+    )
+  ) +
+    geom_area(position = "fill", alpha = 0.9) +
+    scale_fill_manual(values = c(
+      "Backlog" = "#7F7F7F",
+      "In Development" = "#0072B2",
+      "Ready for Review" = "#E69F00",
+      "In QA" = "#009E73"
+    )) +
+    scale_y_continuous(labels = percent) +
+    labs(x = NULL, y = "Share of Active Work") +
+    BASE_THEME
+
+  ggplotly(p, tooltip = "text") %>%
+    layout(
+      title = plotly_title("Flow Mix Over Time"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      yaxis = list(tickformat = ".0%"),
+      legend = list(orientation = "h", x = 0.02, y = -0.2)
+    ) %>%
+    add_plotly_border()
+}
+```
+
+
 In QA
 =====================================
 
