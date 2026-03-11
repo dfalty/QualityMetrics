@@ -341,6 +341,81 @@ COMPLETED_WORK_DATA <- bind_rows(
   mutate(Story_Points = replace_na(Story_Points, 0))
 ```
 
+Executive Summary
+=====================================
+
+Row
+-------------------------------------
+
+### Total Bug Backlog
+
+```{r exec_kpi_bug_backlog}
+backlog_states <- c("unscheduled", "ready for development")
+backlog_df <- BUGS_DATA
+if ("Story Type" %in% names(backlog_df)) {
+  backlog_df <- backlog_df %>% filter(tolower(stringr::str_trim(as.character(`Story Type`))) == "bug")
+}
+if ("State" %in% names(backlog_df)) {
+  backlog_df <- backlog_df %>% filter(tolower(stringr::str_trim(as.character(State))) %in% backlog_states)
+}
+
+valueBox(
+  value = scales::comma(nrow(backlog_df)),
+  caption = "Unscheduled + ready for development bugs",
+  color = ifelse(nrow(backlog_df) <= 25, "success", ifelse(nrow(backlog_df) <= 60, "warning", "danger"))
+)
+```
+
+### Critical / High Backlog
+
+```{r exec_kpi_critical_high_backlog}
+sev01_df <- backlog_df %>%
+  mutate(Severity = normalize_severity(Severity)) %>%
+  filter(Severity %in% c("S0 - Critical", "S1 - High"))
+
+valueBox(
+  value = scales::comma(nrow(sev01_df)),
+  caption = "Severity 0–1 bugs still sitting in backlog",
+  color = ifelse(nrow(sev01_df) == 0, "success", ifelse(nrow(sev01_df) <= 5, "warning", "danger"))
+)
+```
+
+### Current QA Queue
+
+```{r exec_kpi_current_qa_queue}
+latest_snapshot <- QA_STATE_DATA %>%
+  filter(!is.na(`Date/Time`)) %>%
+  arrange(desc(`Date/Time`)) %>%
+  slice(1)
+
+qa_count <- if (nrow(latest_snapshot) == 0) NA_real_ else coalesce(latest_snapshot$`In QA`, 0)
+qa_caption <- if (nrow(latest_snapshot) == 0) {
+  "No QA state snapshot available"
+} else {
+  paste0("Latest snapshot: ", format(latest_snapshot$`Date/Time`, "%Y-%m-%d %H:%M UTC"))
+}
+
+valueBox(
+  value = ifelse(is.na(qa_count), "N/A", scales::comma(qa_count)),
+  caption = qa_caption,
+  color = ifelse(is.na(qa_count), "primary", ifelse(qa_count <= 10, "success", ifelse(qa_count <= 20, "warning", "danger")))
+)
+```
+
+### YTD Hotfixes
+
+```{r exec_kpi_hotfix_ytd}
+hotfix_ytd <- RELEASES_DATA %>%
+  filter(Date >= make_date(year(Sys.Date()), 1, 1), Date <= Sys.Date())
+
+valueBox(
+  value = scales::comma(nrow(hotfix_ytd)),
+  caption = paste0("Hotfix releases year-to-date (", year(Sys.Date()), ")"),
+  color = ifelse(nrow(hotfix_ytd) == 0, "success", ifelse(nrow(hotfix_ytd) <= 6, "warning", "danger"))
+)
+```
+
+
 Bugs:Product
 =====================================
 
