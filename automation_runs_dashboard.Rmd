@@ -153,6 +153,90 @@ release_deployment_data <- tryCatch(
 )
 ```
 
+Executive Summary
+=====================================
+
+Row
+-------------------------------------
+
+### 7-Day Pass Rate
+
+```{r exec_kpi_pass_rate_7d}
+latest_day <- max(runs_data$Run_Day, na.rm = TRUE)
+last_7_cutoff <- latest_day - days(6)
+
+kpi_7d <- runs_data %>%
+  filter(Run_Day >= last_7_cutoff) %>%
+  summarise(
+    Total = n(),
+    Passed = sum(Result == "Pass"),
+    Failed = sum(Result == "Fail"),
+    Pass_Rate = if_else(Total == 0, NA_real_, Passed / Total)
+  )
+
+valueBox(
+  value = ifelse(is.na(kpi_7d$Pass_Rate), "N/A", scales::percent(kpi_7d$Pass_Rate, accuracy = 0.1)),
+  caption = paste0("Last 7 days • ", kpi_7d$Passed, " / ", kpi_7d$Total, " runs passed"),
+  color = ifelse(is.na(kpi_7d$Pass_Rate), "primary", ifelse(kpi_7d$Pass_Rate >= 0.95, "success", ifelse(kpi_7d$Pass_Rate >= 0.85, "warning", "danger")))
+)
+```
+
+### Failed Runs (7 Days)
+
+```{r exec_kpi_fails_7d}
+valueBox(
+  value = scales::comma(kpi_7d$Failed),
+  caption = paste0("Last 7 days • ", scales::comma(kpi_7d$Total), " total runs"),
+  color = ifelse(kpi_7d$Failed == 0, "success", ifelse(kpi_7d$Failed <= 5, "warning", "danger"))
+)
+```
+
+### Untriaged Failures (30 Days)
+
+```{r exec_kpi_untriaged_30d}
+last_30_cutoff <- latest_day - days(29)
+
+failures_30d <- runs_data %>%
+  filter(Run_Day >= last_30_cutoff, Result == "Fail") %>%
+  mutate(
+    `Failure Attribution` = if_else(
+      is.na(`Failure Attribution`) | str_trim(`Failure Attribution`) == "",
+      "Needs Triage",
+      `Failure Attribution`
+    )
+  ) %>%
+  summarise(
+    Total_Failures = n(),
+    Needs_Triage = sum(`Failure Attribution` == "Needs Triage"),
+    Needs_Triage_Rate = if_else(Total_Failures == 0, 0, Needs_Triage / Total_Failures)
+  )
+
+valueBox(
+  value = scales::percent(failures_30d$Needs_Triage_Rate, accuracy = 0.1),
+  caption = paste0(failures_30d$Needs_Triage, " of ", failures_30d$Total_Failures, " failures still untriaged (30d)"),
+  color = ifelse(failures_30d$Needs_Triage_Rate <= 0.05, "success", ifelse(failures_30d$Needs_Triage_Rate <= 0.15, "warning", "danger"))
+)
+```
+
+### Release Deployment Pass Rate (30 Days)
+
+```{r exec_kpi_release_pass_rate_30d}
+release_30d <- release_deployment_data %>%
+  filter(Run_Day >= last_30_cutoff) %>%
+  summarise(
+    Total = n(),
+    Passed = sum(Result == "Pass"),
+    Pass_Rate = if_else(Total == 0, NA_real_, Passed / Total)
+  )
+
+valueBox(
+  value = ifelse(is.na(release_30d$Pass_Rate), "N/A", scales::percent(release_30d$Pass_Rate, accuracy = 0.1)),
+  caption = ifelse(release_30d$Total == 0, "No release deployment runs in the last 30 days", paste0("Last 30 days • ", release_30d$Passed, " / ", release_30d$Total, " release runs passed")),
+  color = ifelse(is.na(release_30d$Pass_Rate), "primary", ifelse(release_30d$Pass_Rate >= 0.95, "success", ifelse(release_30d$Pass_Rate >= 0.85, "warning", "danger")))
+)
+```
+
+
 Automation Runs
 =====================================
 
