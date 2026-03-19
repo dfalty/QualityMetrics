@@ -1207,6 +1207,8 @@ if (nrow(df) == 0) {
   col_dev    <- "#0072B2"  # blue
   col_review <- "#E69F00"  # orange
   col_qa     <- "#009E73"  # bluish green
+  col_goal   <- "#882255"  # Paul Tol wine; CB-safe, distinct from series above
+  qa_goal_n  <- 10
 
   plot_ly(data = df, x = ~`Date/Time`) %>%
     add_trace(
@@ -1245,6 +1247,16 @@ if (nrow(df) == 0) {
         "In QA: %{y}<extra></extra>"
       )
     ) %>%
+    add_trace(
+      x = range(df$`Date/Time`, na.rm = TRUE),
+      y = c(qa_goal_n, qa_goal_n),
+      name = paste0("Goal (", qa_goal_n, ")"),
+      type = "scatter",
+      mode = "lines",
+      line = list(color = col_goal, width = 2, dash = "dash"),
+      hovertemplate = paste0("Goal: ", qa_goal_n, "<extra></extra>"),
+      showlegend = TRUE
+    ) %>%
     layout(
       title = plotly_title("Work in Progress: Dev, Review, QA"),
       plot_bgcolor = "#1f1f1f",
@@ -1262,6 +1274,22 @@ if (nrow(df) == 0) {
         x = 0.5,
         y = -0.15,
         xanchor = "center"
+      ),
+      annotations = list(
+        list(
+          xref = "paper",
+          x = 0.99,
+          yref = "y",
+          y = qa_goal_n,
+          text = paste0("Goal (", qa_goal_n, ")"),
+          showarrow = FALSE,
+          xanchor = "right",
+          font = list(color = col_goal, size = 11),
+          bgcolor = "rgba(31,31,31,0.88)",
+          bordercolor = col_goal,
+          borderwidth = 1,
+          borderpad = 4
+        )
       )
     )
 }
