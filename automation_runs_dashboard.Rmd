@@ -84,6 +84,40 @@ add_plotly_border <- function(p, color = "#333333", width = 1) {
   )
 }
 
+# Goal reference: Paul Tol wine — CB-safe, distinct from pass-rate cyan (#5bc0de)
+GOAL_LINE_COLOR <- "#882255"
+AUTOMATION_PASS_RATE_GOAL <- 0.85
+RELEASE_PASS_RATE_GOAL <- 0.95
+
+pass_rate_goal_gg_hline <- function(yintercept) {
+  geom_hline(
+    yintercept = yintercept,
+    color = GOAL_LINE_COLOR,
+    linetype = "dashed",
+    linewidth = 0.7,
+    inherit.aes = FALSE
+  )
+}
+
+pass_rate_goal_annotation <- function(goal) {
+  list(
+    list(
+      xref = "paper",
+      x = 0.02,
+      yref = "y",
+      y = goal,
+      text = paste0("Goal (", scales::percent(goal, accuracy = 1), ")"),
+      showarrow = FALSE,
+      xanchor = "left",
+      font = list(color = GOAL_LINE_COLOR, size = 11),
+      bgcolor = "rgba(31,31,31,0.88)",
+      bordercolor = GOAL_LINE_COLOR,
+      borderwidth = 1,
+      borderpad = 4
+    )
+  )
+}
+
 # ============================
 # DATA
 # ============================
@@ -297,6 +331,7 @@ p <- ggplot(
 ) +
   geom_line(color = "#5bc0de", linewidth = 1) +
   geom_point(color = "#5bc0de", size = 2) +
+  pass_rate_goal_gg_hline(AUTOMATION_PASS_RATE_GOAL) +
   scale_y_continuous(labels = percent, limits = c(0, 1)) +
   labs(x = NULL, y = "Average Pass Rate") +
   BASE_THEME
@@ -306,7 +341,8 @@ ggplotly(p, tooltip = "text") %>%
     title = plotly_title("Average Passing Rate per Month"),
     plot_bgcolor = "#1f1f1f",
     paper_bgcolor = "#1f1f1f",
-    yaxis = list(tickformat = ".0%")
+    yaxis = list(tickformat = ".0%"),
+    annotations = pass_rate_goal_annotation(AUTOMATION_PASS_RATE_GOAL)
   ) %>%
   add_plotly_border()
 ```
@@ -342,6 +378,7 @@ p <- ggplot(
 ) +
   geom_line(color = "#5bc0de", linewidth = 1) +
   geom_point(color = "#5bc0de", size = 2) +
+  pass_rate_goal_gg_hline(AUTOMATION_PASS_RATE_GOAL) +
   scale_y_continuous(labels = percent, limits = c(0, 1)) +
   labs(x = NULL, y = "Average Pass Rate") +
   BASE_THEME
@@ -351,7 +388,8 @@ ggplotly(p, tooltip = "text") %>%
     title = plotly_title("Average Passing Rate per Week"),
     plot_bgcolor = "#1f1f1f",
     paper_bgcolor = "#1f1f1f",
-    yaxis = list(tickformat = ".0%")
+    yaxis = list(tickformat = ".0%"),
+    annotations = pass_rate_goal_annotation(AUTOMATION_PASS_RATE_GOAL)
   ) %>%
   add_plotly_border()
 ```
@@ -387,6 +425,7 @@ p <- ggplot(
 ) +
   geom_line(color = "#5bc0de", linewidth = 1) +
   geom_point(color = "#5bc0de", size = 2) +
+  pass_rate_goal_gg_hline(AUTOMATION_PASS_RATE_GOAL) +
   scale_y_continuous(labels = percent, limits = c(0, 1)) +
   labs(
     x = NULL,
@@ -404,7 +443,8 @@ ggplotly(p, tooltip = "text") %>%
     title = plotly_title("Daily Pass Rate"),
     plot_bgcolor = "#1f1f1f",
     paper_bgcolor = "#1f1f1f",
-    yaxis = list(tickformat = ".0%")
+    yaxis = list(tickformat = ".0%"),
+    annotations = pass_rate_goal_annotation(AUTOMATION_PASS_RATE_GOAL)
   ) %>%
   add_plotly_border()
 ```
@@ -548,6 +588,7 @@ p <- ggplot(
 ) +
   geom_line(color = "#5bc0de", linewidth = 1) +
   geom_point(color = "#5bc0de", size = 2) +
+  pass_rate_goal_gg_hline(RELEASE_PASS_RATE_GOAL) +
   scale_y_continuous(labels = percent, limits = c(0, 1)) +
   labs(x = NULL, y = "Average Pass Rate") +
   BASE_THEME
@@ -557,7 +598,8 @@ ggplotly(p, tooltip = "text") %>%
     title = plotly_title("Release Deployment: Average Pass Rate per Month"),
     plot_bgcolor = "#1f1f1f",
     paper_bgcolor = "#1f1f1f",
-    yaxis = list(tickformat = ".0%")
+    yaxis = list(tickformat = ".0%"),
+    annotations = pass_rate_goal_annotation(RELEASE_PASS_RATE_GOAL)
   ) %>%
   add_plotly_border()
 ```

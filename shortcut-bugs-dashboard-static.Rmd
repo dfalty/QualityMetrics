@@ -1278,12 +1278,12 @@ if (nrow(df) == 0) {
       annotations = list(
         list(
           xref = "paper",
-          x = 0.99,
+          x = 0.02,
           yref = "y",
           y = qa_goal_n,
           text = paste0("Goal (", qa_goal_n, ")"),
           showarrow = FALSE,
-          xanchor = "right",
+          xanchor = "left",
           font = list(color = col_goal, size = 11),
           bgcolor = "rgba(31,31,31,0.88)",
           bordercolor = col_goal,
