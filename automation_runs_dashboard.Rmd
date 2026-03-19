@@ -18,6 +18,16 @@ library(lubridate)
 library(plotly)
 library(googlesheets4)
 library(scales)
+library(htmltools)
+
+# flexdashboard: passing caption= replaces the whole caption and drops the ### title — keep both via HTML
+vb_caption <- function(title, detail) {
+  HTML(sprintf(
+    '<span class="vb-title">%s</span><span class="vb-detail">%s</span>',
+    htmlEscape(title),
+    htmlEscape(detail, attribute = FALSE)
+  ))
+}
 
 # ============================
 # CONFIG
@@ -153,7 +163,7 @@ release_deployment_data <- tryCatch(
 )
 ```
 
-Executive Summary
+Summary
 =====================================
 
 Row
@@ -176,7 +186,10 @@ kpi_7d <- runs_data %>%
 
 valueBox(
   value = ifelse(is.na(kpi_7d$Pass_Rate), "N/A", scales::percent(kpi_7d$Pass_Rate, accuracy = 0.1)),
-  caption = paste0("Last 7 days • ", kpi_7d$Passed, " / ", kpi_7d$Total, " runs passed"),
+  caption = vb_caption(
+    "7-day pass rate",
+    paste0("Last 7 days • ", kpi_7d$Passed, " / ", kpi_7d$Total, " runs passed")
+  ),
   color = ifelse(is.na(kpi_7d$Pass_Rate), "primary", ifelse(kpi_7d$Pass_Rate >= 0.95, "success", ifelse(kpi_7d$Pass_Rate >= 0.85, "warning", "danger")))
 )
 ```
@@ -186,7 +199,10 @@ valueBox(
 ```{r exec_kpi_fails_7d}
 valueBox(
   value = scales::comma(kpi_7d$Failed),
-  caption = paste0("Last 7 days • ", scales::comma(kpi_7d$Total), " total runs"),
+  caption = vb_caption(
+    "Failed runs (7d)",
+    paste0("Last 7 days • ", scales::comma(kpi_7d$Total), " total runs")
+  ),
   color = ifelse(kpi_7d$Failed == 0, "success", ifelse(kpi_7d$Failed <= 5, "warning", "danger"))
 )
 ```
@@ -213,7 +229,10 @@ failures_30d <- runs_data %>%
 
 valueBox(
   value = scales::percent(failures_30d$Needs_Triage_Rate, accuracy = 0.1),
-  caption = paste0(failures_30d$Needs_Triage, " of ", failures_30d$Total_Failures, " failures still untriaged (30d)"),
+  caption = vb_caption(
+    "Untriaged share (30d)",
+    paste0(failures_30d$Needs_Triage, " of ", failures_30d$Total_Failures, " failures still untriaged")
+  ),
   color = ifelse(failures_30d$Needs_Triage_Rate <= 0.05, "success", ifelse(failures_30d$Needs_Triage_Rate <= 0.15, "warning", "danger"))
 )
 ```
@@ -231,7 +250,14 @@ release_30d <- release_deployment_data %>%
 
 valueBox(
   value = ifelse(is.na(release_30d$Pass_Rate), "N/A", scales::percent(release_30d$Pass_Rate, accuracy = 0.1)),
-  caption = ifelse(release_30d$Total == 0, "No release deployment runs in the last 30 days", paste0("Last 30 days • ", release_30d$Passed, " / ", release_30d$Total, " release runs passed")),
+  caption = ifelse(
+    release_30d$Total == 0,
+    vb_caption("Release pass rate (30d)", "No release deployment runs in the last 30 days"),
+    vb_caption(
+      "Release pass rate (30d)",
+      paste0("Last 30 days • ", release_30d$Passed, " / ", release_30d$Total, " release runs passed")
+    )
+  ),
   color = ifelse(is.na(release_30d$Pass_Rate), "primary", ifelse(release_30d$Pass_Rate >= 0.95, "success", ifelse(release_30d$Pass_Rate >= 0.85, "warning", "danger")))
 )
 ```
