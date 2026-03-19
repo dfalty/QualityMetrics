@@ -270,6 +270,96 @@ Row
 -------------------------------------
 
 ###
+```{r monthly_avg_pass_rate}
+monthly_df <- runs_data %>%
+  group_by(
+    Month = floor_date(Run_Day, "month")
+  ) %>%
+  summarise(
+    Total = n(),
+    Passed = sum(Result == "Pass"),
+    Avg_Pass_Rate = Passed / Total,
+    .groups = "drop"
+  ) %>%
+  arrange(Month)
+
+p <- ggplot(
+  monthly_df,
+  aes(
+    Month,
+    Avg_Pass_Rate,
+    group = 1,
+    text = paste0(
+      "Month: ", format(Month, "%b %Y"),
+      "<br>Avg Pass Rate: ", scales::percent(Avg_Pass_Rate, accuracy = 0.1)
+    )
+  )
+) +
+  geom_line(color = "#5bc0de", linewidth = 1) +
+  geom_point(color = "#5bc0de", size = 2) +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(x = NULL, y = "Average Pass Rate") +
+  BASE_THEME
+
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    title = plotly_title("Average Passing Rate per Month"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    yaxis = list(tickformat = ".0%")
+  ) %>%
+  add_plotly_border()
+```
+
+Row
+-------------------------------------
+
+###
+```{r weekly_avg_pass_rate}
+weekly_df <- runs_data %>%
+  group_by(
+    Week = floor_date(Run_Day, "week", week_start = 1)
+  ) %>%
+  summarise(
+    Total = n(),
+    Passed = sum(Result == "Pass"),
+    Avg_Pass_Rate = Passed / Total,
+    .groups = "drop"
+  ) %>%
+  arrange(Week)
+
+p <- ggplot(
+  weekly_df,
+  aes(
+    Week,
+    Avg_Pass_Rate,
+    group = 1,
+    text = paste0(
+      "Week of: ", format(Week, "%b %d, %Y"),
+      "<br>Avg Pass Rate: ", scales::percent(Avg_Pass_Rate, accuracy = 0.1)
+    )
+  )
+) +
+  geom_line(color = "#5bc0de", linewidth = 1) +
+  geom_point(color = "#5bc0de", size = 2) +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(x = NULL, y = "Average Pass Rate") +
+  BASE_THEME
+
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    title = plotly_title("Average Passing Rate per Week"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    yaxis = list(tickformat = ".0%")
+  ) %>%
+  add_plotly_border()
+```
+
+Row
+-------------------------------------
+
+###
 
 ```{r daily_pass_rate}
 df <- runs_data %>%
@@ -381,96 +471,45 @@ ggplotly(p) %>%
   add_plotly_border()
 ```
 
-Passing Rate
+Operations Load
 =====================================
 
 Row
 -------------------------------------
 
-###
-```{r monthly_avg_pass_rate}
-monthly_df <- runs_data %>%
-  group_by(
-    Month = floor_date(Run_Day, "month")
-  ) %>%
-  summarise(
-    Total = n(),
-    Passed = sum(Result == "Pass"),
-    Avg_Pass_Rate = Passed / Total,
-    .groups = "drop"
-  ) %>%
-  arrange(Month)
+### 
+
+```{r daily_run_volume}
+df <- runs_data %>%
+  count(Run_Day, Result, name = "Runs") %>%
+  tidyr::complete(Run_Day, Result = c("Pass", "Fail"), fill = list(Runs = 0))
 
 p <- ggplot(
-  monthly_df,
+  df,
   aes(
-    Month,
-    Avg_Pass_Rate,
-    group = 1,
+    Run_Day,
+    Runs,
+    fill = Result,
     text = paste0(
-      "Month: ", format(Month, "%b %Y"),
-      "<br>Avg Pass Rate: ", scales::percent(Avg_Pass_Rate, accuracy = 0.1)
+      "Run Day: ", Run_Day,
+      "<br>Result: ", Result,
+      "<br>Runs: ", Runs
     )
   )
 ) +
-  geom_line(color = "#5bc0de", linewidth = 1) +
-  geom_point(color = "#5bc0de", size = 2) +
-  scale_y_continuous(labels = percent, limits = c(0, 1)) +
-  labs(x = NULL, y = "Average Pass Rate") +
-  BASE_THEME
+  geom_col(width = 0.85) +
+  scale_fill_manual(values = c("Pass" = "#009E73", "Fail" = "#D55E00")) +
+  labs(x = NULL, y = "Run Count") +
+  BASE_THEME +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ggplotly(p, tooltip = "text") %>%
   layout(
-    title = plotly_title("Average Passing Rate per Month"),
+    title = plotly_title("Daily Automation Volume (Pass vs Fail)"),
+    barmode = "stack",
     plot_bgcolor = "#1f1f1f",
     paper_bgcolor = "#1f1f1f",
-    yaxis = list(tickformat = ".0%")
-  ) %>%
-  add_plotly_border()
-```
-
-
-Row
--------------------------------------
-
-###
-```{r weekly_avg_pass_rate}
-weekly_df <- runs_data %>%
-  group_by(
-    Week = floor_date(Run_Day, "week", week_start = 1)
-  ) %>%
-  summarise(
-    Total = n(),
-    Passed = sum(Result == "Pass"),
-    Avg_Pass_Rate = Passed / Total,
-    .groups = "drop"
-  ) %>%
-  arrange(Week)
-
-p <- ggplot(
-  weekly_df,
-  aes(
-    Week,
-    Avg_Pass_Rate,
-    group = 1,
-    text = paste0(
-      "Week of: ", format(Week, "%b %d, %Y"),
-      "<br>Avg Pass Rate: ", scales::percent(Avg_Pass_Rate, accuracy = 0.1)
-    )
-  )
-) +
-  geom_line(color = "#5bc0de", linewidth = 1) +
-  geom_point(color = "#5bc0de", size = 2) +
-  scale_y_continuous(labels = percent, limits = c(0, 1)) +
-  labs(x = NULL, y = "Average Pass Rate") +
-  BASE_THEME
-
-ggplotly(p, tooltip = "text") %>%
-  layout(
-    title = plotly_title("Average Passing Rate per Week"),
-    plot_bgcolor = "#1f1f1f",
-    paper_bgcolor = "#1f1f1f",
-    yaxis = list(tickformat = ".0%")
+    legend = list(orientation = "h", x = 0.02, y = -0.2)
   ) %>%
   add_plotly_border()
 ```
