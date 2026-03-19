@@ -75,3 +75,28 @@
 }
 
 .reactable { width: 100% !important; }
+
+/* Value boxes: metric label + detail (see vb_caption in Rmd; flexdashboard drops ### when caption= is set) */
+.value-box .caption {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  text-align: left;
+}
+.value-box .caption .vb-title {
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  opacity: 0.96;
+  line-height: 1.25;
+}
+.value-box .caption .vb-detail {
+  font-size: 0.88rem;
+  font-weight: 450;
+  opacity: 0.93;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
