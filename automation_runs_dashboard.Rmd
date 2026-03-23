@@ -200,10 +200,73 @@ release_deployment_data <- tryCatch(
 Summary
 =====================================
 
-Row
+Row {data-height=100}
 -------------------------------------
 
-### 7-Day Pass Rate
+### Quality Velocity Score
+
+```{r quality_velocity_composite}
+# Calculate composite Quality Velocity Score (0-100)
+# Components:
+# - Pass Rate (40% weight)
+# - Triage Efficiency (30% weight) - inverse of untriaged rate
+# - Escape Rate (30% weight) - inverse of escape rate
+
+# Get component values
+pass_rate_component <- kpi_7d$Pass_Rate
+if (is.na(pass_rate_component)) pass_rate_component <- 0
+
+triage_efficiency <- 1 - failures_30d$Needs_Triage_Rate
+
+# Calculate escape rate inline (from release failures)
+failed_releases <- release_deployment_data %>%
+  filter(Run_Day >= last_30_cutoff, Result == "Fail") %>%
+  nrow()
+total_releases <- release_deployment_data %>%
+  filter(Run_Day >= last_30_cutoff) %>%
+  nrow()
+escape_rate_val <- if (total_releases > 0) failed_releases / total_releases else 0
+
+escape_component <- 1 - escape_rate_val
+
+# Calculate weighted score
+quality_velocity_score <- (
+  pass_rate_component * 0.40 +
+  triage_efficiency * 0.30 +
+  escape_component * 0.30
+) * 100
+
+# Determine status
+score_status <- case_when(
+  quality_velocity_score >= 85 ~ "excellent",
+  quality_velocity_score >= 70 ~ "good",
+  quality_velocity_score >= 50 ~ "fair",
+  TRUE ~ "needs_work"
+)
+
+score_color <- case_when(
+  score_status == "excellent" ~ "success",
+  score_status == "good" ~ "primary",
+  score_status == "fair" ~ "warning",
+  TRUE ~ "danger"
+)
+
+valueBox(
+  value = round(quality_velocity_score),
+  caption = vb_caption(
+    "Quality Velocity Score",
+    paste0(
+      "Pass Rate: ", scales::percent(pass_rate_component, accuracy = 1), " (40%)",
+      " | Triage: ", scales::percent(triage_efficiency, accuracy = 1), " (30%)",
+      " | Escape: ", scales::percent(escape_component, accuracy = 1), " (30%)"
+    )
+  ),
+  color = score_color
+)
+```
+
+Row
+-------------------------------------
 
 ```{r exec_kpi_pass_rate_7d}
 latest_day <- max(runs_data$Run_Day, na.rm = TRUE)
