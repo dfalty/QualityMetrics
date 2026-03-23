@@ -51,6 +51,12 @@ SEVERITY_COLORS <- c(
   "S0 - Critical" = "#D55E00"   # vermillion (NOT pure red)
 )
 
+# Customer impact indicator colors
+CUSTOMER_IMPACT_COLORS <- c(
+  "Customer Facing" = "#D55E00",  # vermillion - high visibility
+  "Internal Only"   = "#009E73"   # green - internal
+)
+
 HIERARCHY_COLORS <- c(
   "Regular Bug"  = "#E69F00",
   "Sub-task Bug" = "#009E73"
@@ -1052,6 +1058,62 @@ if (nrow(df) == 0) {
 
 Critical/High
 =====================================
+
+Row {data-height=150}
+-------------------------------------
+
+### Customer-Facing Bug Impact
+
+```{r customer_impact_kpis}
+# Estimate customer-facing bugs based on product and severity
+customer_facing_products <- c("Tax", "Roth", "Insurance/P&C", "Estate")
+
+df <- BUGS_DATA %>%
+  mutate(
+    Is_Customer_Facing = Product %in% customer_facing_products | Severity %in% c("S0 - Critical", "S1 - High")
+  )
+
+total_bugs <- nrow(df)
+customer_facing_count <- sum(df$Is_Customer_Facing, na.rm = TRUE)
+customer_pct <- if (total_bugs > 0) customer_facing_count / total_bugs else 0
+
+valueBox(
+  value = customer_facing_count,
+  caption = vb_caption(
+    "Customer-Facing Bugs",
+    paste0("Bugs in customer products or S0/S1 severity")
+  ),
+  color = ifelse(customer_pct <= 0.20, "success", ifelse(customer_pct <= 0.40, "warning", "danger"))
+)
+
+# Customer-facing by severity
+customer_by_sev <- df %>%
+  filter(Is_Customer_Facing == TRUE) %>%
+  count(Severity, name = "Count")
+
+s0_cust <- customer_by_sev %>% filter(Severity == "S0 - Critical") %>% pull(Count) %>% sum(na.rm = TRUE)
+s1_cust <- customer_by_sev %>% filter(Severity == "S1 - High") %>% pull(Count) %>% sum(na.rm = TRUE)
+
+valueBox(
+  value = s0_cust + s1_cust,
+  caption = vb_caption(
+    "Critical/High (Customer)",
+    paste0(s0_cust, " S0 + ", s1_cust, " S1 in customer products")
+  ),
+  color = ifelse(s0_cust + s1_cust == 0, "success", "warning")
+)
+
+# S0/S1 as percentage of customer-facing
+s0_s1_pct <- if (customer_facing_count > 0) (s0_cust + s1_cust) / customer_facing_count else 0
+valueBox(
+  value = scales::percent(s0_s1_pct, accuracy = 1),
+  caption = vb_caption(
+    "S0/S1 Rate",
+    "Critical/High as % of customer-facing bugs"
+  ),
+  color = ifelse(s0_s1_pct <= 0.10, "success", ifelse(s0_s1_pct <= 0.25, "warning", "danger"))
+)
+```
 
 Row {data-height=440}
 -------------------------------------
