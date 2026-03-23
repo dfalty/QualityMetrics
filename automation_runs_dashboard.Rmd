@@ -116,6 +116,31 @@ pass_rate_goal_annotation <- function(goal) {
       borderpad = 4
     )
   )
+)}
+
+# ============================
+# STATISTICAL ANALYSIS HELPERS
+# ============================
+# Calculate confidence interval for pass rate
+calc_pass_rate_ci <- function(n, p, confidence = 0.95) {
+  # Wilson score interval (better for proportions than Wald)
+  z <- qnorm(1 - (1 - confidence) / 2)
+  denominator <- n + z^2
+  center <- (p * n + z^2 / 2) / denominator
+  margin <- z * sqrt((p * (1 - p) / n) + (z^2 / (4 * n^2))) / denominator
+  list(
+    lower = max(0, center - margin),
+    upper = min(1, center + margin)
+  )
+}
+
+# Sample size display helper
+get_sample_size_category <- function(n) {
+  case_when(
+    n >= 100 ~ "High",
+    n >= 30 ~ "Medium", 
+    TRUE ~ "Low"
+  )
 }
 
 # ============================
@@ -325,7 +350,10 @@ p <- ggplot(
     group = 1,
     text = paste0(
       "Month: ", format(Month, "%b %Y"),
-      "<br>Avg Pass Rate: ", scales::percent(Avg_Pass_Rate, accuracy = 0.1)
+      "<br>Pass Rate: ", scales::percent(Avg_Pass_Rate, accuracy = 0.1),
+      "<br>Sample Size: ", Total, " runs",
+      "<br>95% CI: ", scales::percent(calc_pass_rate_ci(Total, Avg_Pass_Rate)$lower, accuracy = 1),
+      " - ", scales::percent(calc_pass_rate_ci(Total, Avg_Pass_Rate)$upper, accuracy = 1)
     )
   )
 ) +
@@ -336,7 +364,7 @@ p <- ggplot(
   labs(x = NULL, y = "Average Pass Rate") +
   BASE_THEME
 
-ggplotly(p, tooltip = "text") %>%
+ggplotly(p, tooltip = c("text")) %>%
   layout(
     title = plotly_title("Average Passing Rate per Month"),
     plot_bgcolor = "#1f1f1f",
