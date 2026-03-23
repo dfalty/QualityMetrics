@@ -121,6 +121,45 @@ calc_trend_line <- function(df, date_col, value_col) {
   df %>% select(-day_num)
 }
 
+# ============================
+# ANOMALY DETECTION HELPERS
+# ============================
+# Detect statistical outliers using IQR method
+detect_anomalies_iqr <- function(df, value_col, multiplier = 1.5) {
+  values <- df %>% pull({{ value_col }}) %>% na.omit()
+  if (length(values) < 4) return(rep(FALSE, nrow(df)))
+  
+  q1 <- quantile(values, 0.25)
+  q3 <- quantile(values, 0.75)
+  iqr <- q3 - q1
+  lower <- q1 - multiplier * iqr
+  upper <- q3 + multiplier * iqr
+  
+  df %>% mutate(
+    is_anomaly = {{ value_col }} < lower | {{ value_col }} > upper,
+    anomaly_type = case_when(
+      {{ value_col }} < lower ~ "low",
+      {{ value_col }} > upper ~ "high",
+      TRUE ~ NA_character_
+    )
+  )
+}
+
+# Z-score based anomaly detection
+detect_anomalies_zscore <- function(df, value_col, threshold = 2) {
+  values <- df %>% pull({{ value_col }}) %>% na.omit()
+  if (length(values) < 4) return(df %>% mutate(is_anomaly = FALSE, z_score = NA_real_))
+  
+  mean_val <- mean(values)
+  sd_val <- sd(values)
+  if (sd_val == 0) return(df %>% mutate(is_anomaly = FALSE, z_score = 0))
+  
+  df %>% mutate(
+    z_score = abs(({{ value_col }} - mean_val) / sd_val),
+    is_anomaly = z_score > threshold
+  )
+}
+
 # Trend direction indicator
 get_trend_direction <- function(df, value_col) {
   if (nrow(df) < 2) return("stable")
@@ -492,11 +531,23 @@ df <- df %>% select(-Run_Day_num)
 trend_dir <- get_trend_direction(df, Pass_Rate)
 trend_emoji <- switch(trend_dir, "improving" = "📈", "declining" = "📉", "stable" = "➡️")
 
+# Detect anomalies
+df <- df %>% detect_anomalies_zscore("Pass_Rate", threshold = 2)
+
+# Count anomalies for display
+anomaly_count <- sum(df$is_anomaly, na.rm = TRUE)
+anomaly_alert <- ifelse(anomaly_count > 0, paste0(" ⚠️ ", anomaly_count, " anomaly(s)"), "")
+
 p <- ggplot(df, aes(Run_Day, Pass_Rate, group = 1)) +
   geom_line(aes(y = Trend_Line), color = "#E69F00", linewidth = 1.5, linetype = "dashed", alpha = 0.7, na.rm = TRUE) +
   geom_line(aes(y = Rolling_Avg_30D), color = "#D55E00", linewidth = 2, linetype = "dotdash", alpha = 0.8, na.rm = TRUE) +
   geom_line(aes(y = Rolling_Avg_7D), color = "#009E73", linewidth = 1.5, na.rm = TRUE) +
   geom_line(color = "#5bc0de", linewidth = 1) +
+  geom_point(
+    data = df %>% filter(is_anomaly == TRUE),
+    aes(Run_Day, Pass_Rate),
+    color = "#D55E00", size = 8, shape = 21, fill = "#D55E00", stroke = 2
+  ) +
   geom_point(color = "#5bc0de", size = 2) +
   pass_rate_goal_gg_hline(AUTOMATION_PASS_RATE_GOAL) +
   scale_y_continuous(labels = percent, limits = c(0, 1)) +
