@@ -426,7 +426,7 @@ p <- ggplot(
   labs(x = NULL, y = "Average Pass Rate") +
   BASE_THEME
 
-ggplotly(p, tooltip = "text") %>%
+ggplotly(p, tooltip = c("x", "y")) %>%
   layout(
     title = plotly_title("Average Passing Rate per Month"),
     plot_bgcolor = "#1f1f1f",
@@ -473,7 +473,7 @@ p <- ggplot(
   labs(x = NULL, y = "Average Pass Rate") +
   BASE_THEME
 
-ggplotly(p, tooltip = "text") %>%
+ggplotly(p, tooltip = c("x", "y")) %>%
   layout(
     title = plotly_title("Average Passing Rate per Week"),
     plot_bgcolor = "#1f1f1f",
@@ -528,7 +528,7 @@ p <- ggplot(
   ) +
   BASE_THEME
 
-ggplotly(p, tooltip = "text") %>%
+ggplotly(p, tooltip = c("x", "y")) %>%
   layout(
     title = plotly_title("Daily Pass Rate"),
     plot_bgcolor = "#1f1f1f",
@@ -633,7 +633,7 @@ p <- ggplot(
   BASE_THEME +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-ggplotly(p, tooltip = "text") %>%
+ggplotly(p, tooltip = c("x", "y")) %>%
   layout(
     title = plotly_title("Daily Automation Volume (Pass vs Fail)"),
     barmode = "stack",
@@ -683,7 +683,7 @@ p <- ggplot(
   labs(x = NULL, y = "Average Pass Rate") +
   BASE_THEME
 
-ggplotly(p, tooltip = "text") %>%
+ggplotly(p, tooltip = c("x", "y")) %>%
   layout(
     title = plotly_title("Release Deployment: Average Pass Rate per Month"),
     plot_bgcolor = "#1f1f1f",
