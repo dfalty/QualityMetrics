@@ -20,6 +20,7 @@ library(googlesheets4)
 library(scales)
 library(htmltools)
 library(zoo)  # For rolling averages
+library(reactable)  # For interactive tables
 
 # flexdashboard: passing caption= replaces the whole caption and drops the ### title — keep both via HTML
 vb_caption <- function(title, detail) {
@@ -93,6 +94,33 @@ RELEASE_PASS_RATE_GOAL <- 0.95
 # ============================
 # TREND ANALYSIS HELPERS
 # ============================
+# flexdashboard caption helper for title + detail
+vb_caption <- function(title, detail) {
+  HTML(sprintf(
+    '<span class="vb-title">%s</span><span class="vb-detail">%s</span>',
+    htmlEscape(title),
+    htmlEscape(detail, attribute = FALSE)
+  ))
+}
+
+# Reactable theme for dark mode
+REACTABLE_THEME_DARK <- reactableTheme(
+  color = "#e6e6e6",
+  backgroundColor = "#1f1f1f",
+  borderColor = "#333333",
+  stripedColor = "#242424",
+  highlightColor = "#2b2b2b",
+  cellPadding = "10px 12px",
+  style = list(fontSize = "13px"),
+  headerStyle = list(
+    backgroundColor = "#1a1a1a",
+    color = "#e6e6e6",
+    borderColor = "#333333",
+    fontWeight = 600
+  ),
+  tableBodyStyle = list(borderColor = "#333333")
+)
+
 # Rolling average calculation
 calc_rolling_avg <- function(df, date_col, value_col, window_days = 7) {
   df %>%
@@ -742,4 +770,246 @@ ggplotly(p, tooltip = "text") %>%
     annotations = pass_rate_goal_annotation(RELEASE_PASS_RATE_GOAL)
   ) %>%
   add_plotly_border()
+```
+
+
+
+Flaky Test Detection
+=====================================
+
+Row {data-height=200}
+-------------------------------------
+
+### Flaky Tests Detected (Last 30 Days)
+
+```{r flaky_test_kpi}
+# Detect flaky tests: tests that flip between pass/fail frequently
+flaky_threshold <- 0.2  # 20% flip rate threshold
+
+flaky_analysis <- runs_data %>%
+  filter(Run_Day >= Sys.Date() - days(30)) %>%
+  group_by(`Run Type`) %>%
+  summarise(
+    Total_Runs = n(),
+    Pass_Count = sum(Result == "Pass"),
+    Fail_Count = sum(Result == "Fail"),
+    Pass_Rate = Pass_Count / Total_Runs,
+    Is_Flaky = Pass_Rate > flaky_threshold & Pass_Rate < (1 - flaky_threshold),
+    .groups = "drop"
+  )
+
+flaky_count <- sum(flaky_analysis$Is_Flaky, na.rm = TRUE)
+flaky_tests <- flaky_analysis %>% filter(Is_Flaky == TRUE) %>% pull(`Run Type`)
+
+valueBox(
+  value = flaky_count,
+  caption = vb_caption(
+    "Flaky Tests (30d)",
+    ifelse(flaky_count > 0, paste0("Tests with 20-80% pass rate: ", paste(flaky_tests, collapse = ", ")), "No flaky tests detected")
+  ),
+  color = ifelse(flaky_count == 0, "success", ifelse(flaky_count <= 2, "warning", "danger"))
+)
+```
+
+### Test Stability Score
+
+```{r stability_score_kpi}
+# Calculate overall stability: percentage of tests that are NOT flaky
+if (nrow(flaky_analysis) > 0) {
+  stability_score <- (sum(!flaky_analysis$Is_Flaky, na.rm = TRUE) / nrow(flaky_analysis))
+} else {
+  stability_score <- 1
+}
+
+valueBox(
+  value = scales::percent(stability_score, accuracy = 1),
+  caption = vb_caption(
+    "Test Stability Score",
+    paste0("Percentage of stable tests (flip rate < 20%)")
+  ),
+  color = ifelse(stability_score >= 0.90, "success", ifelse(stability_score >= 0.75, "warning", "danger"))
+)
+```
+
+### Needs Investigation
+
+```{r needs_investigation_kpi}
+investigate_count <- flaky_analysis %>%
+  filter(Pass_Rate >= 0.05 & Pass_Rate <= 0.95 & Total_Runs >= 5) %>%
+  nrow()
+
+valueBox(
+  value = investigate_count,
+  caption = vb_caption(
+    "Tests Needing Review",
+    "Tests with 5-95% pass rate and 5+ runs"
+  ),
+  color = ifelse(investigate_count == 0, "success", "warning")
+)
+```
+
+Row {data-height=500}
+-------------------------------------
+
+### Test Pass Rate Distribution
+
+```{r flaky_distribution}
+# Show distribution of pass rates across all tests
+df <- runs_data %>%
+  filter(Run_Day >= Sys.Date() - days(30)) %>%
+  group_by(`Run Type`) %>%
+  summarise(
+    Total = n(),
+    Passed = sum(Result == "Pass"),
+    Pass_Rate = ifelse(Total > 0, Passed / Total, NA),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(Pass_Rate), Total >= 3)
+
+if (nrow(df) == 0) {
+  plotly_empty(type = "bar") %>%
+    layout(title = plotly_title("Test Pass Rate Distribution (Last 30 Days)"))
+} else {
+  # Categorize tests
+  df <- df %>%
+    mutate(
+      Category = case_when(
+        Pass_Rate >= 0.95 ~ "Stable (Pass)",
+        Pass_Rate <= 0.05 ~ "Stable (Fail)",
+        Pass_Rate >= 0.20 & Pass_Rate <= 0.80 ~ "Flaky",
+        TRUE ~ "Marginally Stable"
+      ),
+      Category = factor(Category, levels = c("Stable (Pass)", "Marginally Stable", "Flaky", "Stable (Fail)"))
+    )
+  
+  # Color by category
+  cat_colors <- c(
+    "Stable (Pass)" = "#009E73",
+    "Marginally Stable" = "#E69F00", 
+    "Flaky" = "#D55E00",
+    "Stable (Fail)" = "#7F7F7F"
+  )
+  
+  plot_ly(
+    data = df,
+    x = ~reorder(`Run Type`, Pass_Rate),
+    y = ~Pass_Rate,
+    color = ~Category,
+    colors = cat_colors,
+    type = "bar",
+    marker = list(line = list(color = "#1f1f1f", width = 1)),
+    hovertemplate = paste0(
+      "Test: %{x}<br>",
+      "Pass Rate: %{y:.1%}<br>",
+      "Runs: %{customdata}<extra></extra>"
+    ),
+    customdata = ~Total
+  ) %>%
+    layout(
+      title = plotly_title("Test Pass Rate Distribution (Last 30 Days)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(
+        title = "",
+        showgrid = FALSE,
+        tickangle = 45
+      ),
+      yaxis = list(
+        title = "Pass Rate",
+        tickformat = ".0%",
+        showgrid = TRUE,
+        gridcolor = "#333333",
+        range = c(0, 1)
+      ),
+      legend = list(
+        orientation = "h",
+        x = 0.5,
+        y = -0.2,
+        xanchor = "center",
+        font = list(color = "#ffffff")
+      )
+    ) %>%
+    add_plotly_border()
+}
+```
+
+Row {data-height=500}
+-------------------------------------
+
+### Tests Requiring Attention
+
+```{r flaky_tests_table}
+# Table of flaky/marginal tests
+df <- runs_data %>%
+  filter(Run_Day >= Sys.Date() - days(30)) %>%
+  group_by(`Run Type`) %>%
+  summarise(
+    Total_Runs = n(),
+    Passed = sum(Result == "Pass"),
+    Failed = sum(Result == "Fail"),
+    Pass_Rate = Passed / Total_Runs,
+    Flip_Rate = 2 * min(Passed, Failed) / Total_Runs,
+    .groups = "drop"
+  ) %>%
+  filter(Total_Runs >= 5, Pass_Rate > 0.05, Pass_Rate < 0.95) %>%
+  arrange(Pass_Rate) %>%
+  mutate(
+    Priority = case_when(
+      Pass_Rate < 0.20 | Pass_Rate > 0.80 ~ "Low",
+      Pass_Rate < 0.35 | Pass_Rate > 0.65 ~ "Medium",
+      TRUE ~ "High"
+    )
+  )
+
+if (nrow(df) == 0) {
+  cat("No tests requiring attention (need 5+ runs with 5-95% pass rate)")
+} else {
+  reactable(
+    df,
+    theme = REACTABLE_THEME_DARK,
+    searchable = TRUE,
+    pagination = TRUE,
+    defaultPageSize = 10,
+    highlight = TRUE,
+    bordered = TRUE,
+    compact = TRUE,
+    defaultSorted = "Flip_Rate",
+    defaultSortOrder = "desc",
+    defaultColDef = colDef(vAlign = "top"),
+    columns = list(
+      `Run Type` = colDef(width = 250, minWidth = 200),
+      Total_Runs = colDef(width = 100, name = "Runs"),
+      Passed = colDef(width = 80),
+      Failed = colDef(width = 80),
+      Pass_Rate = colDef(
+        width = 100,
+        name = "Pass Rate",
+        cell = function(value) scales::percent(value, accuracy = 0.1)
+      ),
+      Flip_Rate = colDef(
+        width = 100,
+        name = "Flip Rate",
+        cell = function(value) scales::percent(value, accuracy = 0.1)
+      ),
+      Priority = colDef(
+        width = 100,
+        cell = function(value) {
+          color <- switch(value, "High" = "#D55E00", "Medium" = "#E69F00", "#009E73")
+          htmltools::div(
+            style = list(
+              display = "inline-block",
+              padding = "3px 10px",
+              borderRadius = "999px",
+              background = color,
+              color = "#111111",
+              fontWeight = 700,
+              fontSize = "12px"
+            ),
+            value
+          )
+        }
+      )
+    )
+  )
+}
 ```
