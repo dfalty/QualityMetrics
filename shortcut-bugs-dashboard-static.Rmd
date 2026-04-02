@@ -64,11 +64,12 @@ severity_levels <- c(
   "Need Triage"
 )
 
-# Completed work colors (monthly completions by type)
+# Completed work colors (monthly completions by type; Wong-style palette)
 WORKTYPE_COLORS <- c(
-  "Bug"     = "#D55E00",  # vermillion
-  "Feature" = "#0072B2",  # blue
-  "Chore"   = "#009E73"   # bluish green
+  "Bug"          = "#D55E00",  # vermillion
+  "Sub-Task Bug" = "#56B4E9",  # sky blue (distinct from Feature blue; colorblind-friendly)
+  "Feature"      = "#0072B2",  # blue
+  "Chore"        = "#009E73"   # bluish green
 )
 
 PRODUCT_COLORS <- c(
@@ -333,8 +334,19 @@ BUGS_DATA     <- BUGS_RAW %>% clean_bugs()
 RELEASES_DATA <- RELEASES_RAW %>% clean_releases()
 QA_STATE_DATA <- QA_RAW %>% clean_qa_snapshots()
 
+# Bugs: top-level vs sub-task (Parent ID empty/missing => Bug; else Sub-Task Bug)
+bugs_for_completed <- BUGS_RAW
+if (!("Parent ID" %in% names(bugs_for_completed))) {
+  bugs_for_completed$`Parent ID` <- NA_character_
+}
+bugs_top_level <- bugs_for_completed %>%
+  filter(is.na(`Parent ID`) | `Parent ID` == "")
+bugs_subtasks <- bugs_for_completed %>%
+  filter(!is.na(`Parent ID`) & `Parent ID` != "")
+
 COMPLETED_WORK_DATA <- bind_rows(
-  clean_completed(BUGS_RAW, "Bug"),
+  clean_completed(bugs_top_level, "Bug"),
+  clean_completed(bugs_subtasks, "Sub-Task Bug"),
   clean_completed(FEATURES_RAW, "Feature"),
   clean_completed(CHORES_RAW, "Chore")
 ) %>%
