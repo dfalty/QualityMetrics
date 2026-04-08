@@ -19,6 +19,8 @@ library(plotly)
 library(googlesheets4)
 library(scales)
 library(htmltools)
+library(zoo)  # For rolling averages
+library(reactable)  # For interactive tables
 
 # flexdashboard: passing caption= replaces the whole caption and drops the ### title — keep both via HTML
 vb_caption <- function(title, detail) {
@@ -88,6 +90,120 @@ add_plotly_border <- function(p, color = "#333333", width = 1) {
 GOAL_LINE_COLOR <- "#882255"
 AUTOMATION_PASS_RATE_GOAL <- 0.85
 RELEASE_PASS_RATE_GOAL <- 0.95
+
+# ============================
+# TREND ANALYSIS HELPERS
+# ============================
+# flexdashboard caption helper for title + detail
+vb_caption <- function(title, detail) {
+  HTML(sprintf(
+    '<span class="vb-title">%s</span><span class="vb-detail">%s</span>',
+    htmlEscape(title),
+    htmlEscape(detail, attribute = FALSE)
+  ))
+}
+
+# Reactable theme for dark mode
+REACTABLE_THEME_DARK <- reactableTheme(
+  color = "#e6e6e6",
+  backgroundColor = "#1f1f1f",
+  borderColor = "#333333",
+  stripedColor = "#242424",
+  highlightColor = "#2b2b2b",
+  cellPadding = "10px 12px",
+  style = list(fontSize = "13px"),
+  headerStyle = list(
+    backgroundColor = "#1a1a1a",
+    color = "#e6e6e6",
+    borderColor = "#333333",
+    fontWeight = 600
+  ),
+  tableBodyStyle = list(borderColor = "#333333")
+)
+
+# Rolling average calculation
+calc_rolling_avg <- function(df, date_col, value_col, window_days = 7) {
+  df %>%
+    mutate({{ date_col }} := as.Date({{ date_col }})) %>%
+    arrange({{ date_col }}) %>%
+    mutate(
+      rolling_avg = roll_mean({{ value_col }},
+        n = window_days,
+        align = "right",
+        fill = NA
+      )
+    )
+}
+
+# Linear regression trend line
+calc_trend_line <- function(df, date_col, value_col) {
+  df <- df %>% mutate({{ date_col }} := as.Date({{ date_col }}))
+  df <- df %>% mutate(day_num = as.numeric({{ date_col }} - min({{ date_col }}, na.rm = TRUE)))
+  
+  valid <- df %>% filter(!is.na({{ value_col }}) & !is.na(day_num))
+  if (nrow(valid) < 2) return(df %>% mutate(trend = NA_real_))
+  
+  model <- lm(as.formula(paste0("`", value_col, "` ~ day_num")), data = valid)
+  df <- df %>% mutate(trend = predict(model, newdata = df))
+  
+  df %>% select(-day_num)
+}
+
+# ============================
+# ANOMALY DETECTION HELPERS
+# ============================
+# Detect statistical outliers using IQR method
+detect_anomalies_iqr <- function(df, value_col, multiplier = 1.5) {
+  values <- df %>% pull({{ value_col }}) %>% na.omit()
+  if (length(values) < 4) return(rep(FALSE, nrow(df)))
+  
+  q1 <- quantile(values, 0.25)
+  q3 <- quantile(values, 0.75)
+  iqr <- q3 - q1
+  lower <- q1 - multiplier * iqr
+  upper <- q3 + multiplier * iqr
+  
+  df %>% mutate(
+    is_anomaly = {{ value_col }} < lower | {{ value_col }} > upper,
+    anomaly_type = case_when(
+      {{ value_col }} < lower ~ "low",
+      {{ value_col }} > upper ~ "high",
+      TRUE ~ NA_character_
+    )
+  )
+}
+
+# Z-score based anomaly detection
+detect_anomalies_zscore <- function(df, value_col, threshold = 2) {
+  values <- df %>% pull({{ value_col }}) %>% na.omit()
+  if (length(values) < 4) return(df %>% mutate(is_anomaly = FALSE, z_score = NA_real_))
+  
+  mean_val <- mean(values)
+  sd_val <- sd(values)
+  if (sd_val == 0) return(df %>% mutate(is_anomaly = FALSE, z_score = 0))
+  
+  df %>% mutate(
+    z_score = abs(({{ value_col }} - mean_val) / sd_val),
+    is_anomaly = z_score > threshold
+  )
+}
+
+# Trend direction indicator
+get_trend_direction <- function(df, value_col) {
+  if (nrow(df) < 2) return("stable")
+  
+  recent <- df %>% filter(!is.na({{ value_col }})) %>% tail(7)
+  if (nrow(recent) < 2) return("stable")
+  
+  first_val <- recent %>% head(1) %>% pull({{ value_col }})
+  last_val <- recent %>% tail(1) %>% pull({{ value_col }})
+  
+  diff_pct <- (last_val - first_val) / first_val
+  
+  if (diff_pct > 0.02) return("improving")
+  if (diff_pct < -0.02) return("declining")
+  "stable"
+}
 
 pass_rate_goal_gg_hline <- function(yintercept) {
   geom_hline(
@@ -315,34 +431,47 @@ monthly_df <- runs_data %>%
     Avg_Pass_Rate = Passed / Total,
     .groups = "drop"
   ) %>%
-  arrange(Month)
-
-p <- ggplot(
-  monthly_df,
-  aes(
-    Month,
-    Avg_Pass_Rate,
-    group = 1,
-    text = paste0(
-      "Month: ", format(Month, "%b %Y"),
-      "<br>Avg Pass Rate: ", scales::percent(Avg_Pass_Rate, accuracy = 0.1)
-    )
+  arrange(Month) %>%
+  mutate(
+    Rolling_Avg_3M = roll_mean(Avg_Pass_Rate, n = 3, align = "right", fill = NA)
   )
-) +
+
+# Calculate trend
+monthly_df <- monthly_df %>%
+  mutate(Month_num = as.numeric(Month - min(Month, na.rm = TRUE)))
+valid_data <- monthly_df %>% filter(!is.na(Avg_Pass_Rate) & !is.na(Month_num))
+if (nrow(valid_data) >= 2) {
+  model <- lm(Avg_Pass_Rate ~ Month_num, data = valid_data)
+  monthly_df <- monthly_df %>% mutate(Trend_Line = predict(model, newdata = monthly_df))
+} else {
+  monthly_df <- monthly_df %>% mutate(Trend_Line = NA_real_)
+}
+monthly_df <- monthly_df %>% select(-Month_num)
+
+# Trend direction
+trend_dir <- get_trend_direction(monthly_df, Avg_Pass_Rate)
+trend_emoji <- switch(trend_dir, "improving" = "📈", "declining" = "📉", "stable" = "➡️")
+
+p <- ggplot(monthly_df, aes(Month, Avg_Pass_Rate, group = 1)) +
+  geom_line(aes(y = Trend_Line), color = "#E69F00", linewidth = 1.5, linetype = "dashed", alpha = 0.7, na.rm = TRUE) +
   geom_line(color = "#5bc0de", linewidth = 1) +
   geom_point(color = "#5bc0de", size = 2) +
+  geom_line(aes(y = Rolling_Avg_3M), color = "#009E73", linewidth = 1.5, linetype = "solid", na.rm = TRUE) +
   pass_rate_goal_gg_hline(AUTOMATION_PASS_RATE_GOAL) +
   scale_y_continuous(labels = percent, limits = c(0, 1)) +
   labs(x = NULL, y = "Average Pass Rate") +
   BASE_THEME
 
-ggplotly(p, tooltip = "text") %>%
+ggplotly(p, tooltip = c("text", "y")) %>%
   layout(
-    title = plotly_title("Average Passing Rate per Month"),
+    title = list(text = paste0("<b>Average Passing Rate per Month ", trend_emoji, "</b>"), x = 0.02, xanchor = "left"),
     plot_bgcolor = "#1f1f1f",
     paper_bgcolor = "#1f1f1f",
     yaxis = list(tickformat = ".0%"),
-    annotations = pass_rate_goal_annotation(AUTOMATION_PASS_RATE_GOAL)
+    annotations = c(
+      pass_rate_goal_annotation(AUTOMATION_PASS_RATE_GOAL),
+      list(x = 0.98, y = 0.05, xref = "paper", yref = "paper", text = "— · · — 3-mo avg", showarrow = FALSE, font = list(color = "#009E73", size = 10))
+    )
   ) %>%
   add_plotly_border()
 ```
@@ -409,21 +538,44 @@ df <- runs_data %>%
     Pass_Rate = Passed / Total,
     .groups = "drop"
   ) %>%
-  arrange(Run_Day)
-
-p <- ggplot(
-  df,
-  aes(
-    Run_Day,
-    Pass_Rate,
-    group = 1,
-    text = paste0(
-      "Run Day: ", Run_Day,
-      "<br>Pass Rate: ", scales::percent(Pass_Rate, accuracy = 0.1)
-    )
+  arrange(Run_Day) %>%
+  mutate(
+    Rolling_Avg_7D = roll_mean(Pass_Rate, n = 7, align = "right", fill = NA),
+    Rolling_Avg_30D = roll_mean(Pass_Rate, n = 30, align = "right", fill = NA)
   )
-) +
+
+# Calculate linear trend
+df <- df %>% mutate(Run_Day_num = as.numeric(Run_Day - min(Run_Day, na.rm = TRUE)))
+valid_df <- df %>% filter(!is.na(Pass_Rate) & !is.na(Run_Day_num))
+if (nrow(valid_df) >= 2) {
+  model <- lm(Pass_Rate ~ Run_Day_num, data = valid_df)
+  df <- df %>% mutate(Trend_Line = predict(model, newdata = df))
+} else {
+  df <- df %>% mutate(Trend_Line = NA_real_)
+}
+df <- df %>% select(-Run_Day_num)
+
+# Trend direction
+trend_dir <- get_trend_direction(df, Pass_Rate)
+trend_emoji <- switch(trend_dir, "improving" = "📈", "declining" = "📉", "stable" = "➡️")
+
+# Detect anomalies
+df <- df %>% detect_anomalies_zscore("Pass_Rate", threshold = 2)
+
+# Count anomalies for display
+anomaly_count <- sum(df$is_anomaly, na.rm = TRUE)
+anomaly_alert <- ifelse(anomaly_count > 0, paste0(" ⚠️ ", anomaly_count, " anomaly(s)"), "")
+
+p <- ggplot(df, aes(Run_Day, Pass_Rate, group = 1)) +
+  geom_line(aes(y = Trend_Line), color = "#E69F00", linewidth = 1.5, linetype = "dashed", alpha = 0.7, na.rm = TRUE) +
+  geom_line(aes(y = Rolling_Avg_30D), color = "#D55E00", linewidth = 2, linetype = "dotdash", alpha = 0.8, na.rm = TRUE) +
+  geom_line(aes(y = Rolling_Avg_7D), color = "#009E73", linewidth = 1.5, na.rm = TRUE) +
   geom_line(color = "#5bc0de", linewidth = 1) +
+  geom_point(
+    data = df %>% filter(is_anomaly == TRUE),
+    aes(Run_Day, Pass_Rate),
+    color = "#D55E00", size = 8, shape = 21, fill = "#D55E00", stroke = 2
+  ) +
   geom_point(color = "#5bc0de", size = 2) +
   pass_rate_goal_gg_hline(AUTOMATION_PASS_RATE_GOAL) +
   scale_y_continuous(labels = percent, limits = c(0, 1)) +
@@ -435,6 +587,22 @@ p <- ggplot(
       format(latest_run_at, "%b %d, %H:%M", tz = RUNS_TZ),
       RUNS_TZ
     )
+  ) +
+  BASE_THEME
+
+ggplotly(p, tooltip = c("text", "y")) %>%
+  layout(
+    title = list(text = paste0("<b>Daily Pass Rate ", trend_emoji, "</b>"), x = 0.02, xanchor = "left"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    yaxis = list(tickformat = ".0%"),
+    annotations = c(
+      pass_rate_goal_annotation(AUTOMATION_PASS_RATE_GOAL),
+      list(x = 0.98, y = 0.05, xref = "paper", yref = "paper", text = "— 7-day · · — 30-day", showarrow = FALSE, font = list(color = "#777777", size = 9))
+    )
+  ) %>%
+  add_plotly_border()
+```
   ) +
   BASE_THEME
 
@@ -602,4 +770,246 @@ ggplotly(p, tooltip = "text") %>%
     annotations = pass_rate_goal_annotation(RELEASE_PASS_RATE_GOAL)
   ) %>%
   add_plotly_border()
+```
+
+
+
+Flaky Test Detection
+=====================================
+
+Row {data-height=200}
+-------------------------------------
+
+### Flaky Tests Detected (Last 30 Days)
+
+```{r flaky_test_kpi}
+# Detect flaky tests: tests that flip between pass/fail frequently
+flaky_threshold <- 0.2  # 20% flip rate threshold
+
+flaky_analysis <- runs_data %>%
+  filter(Run_Day >= Sys.Date() - days(30)) %>%
+  group_by(`Run Type`) %>%
+  summarise(
+    Total_Runs = n(),
+    Pass_Count = sum(Result == "Pass"),
+    Fail_Count = sum(Result == "Fail"),
+    Pass_Rate = Pass_Count / Total_Runs,
+    Is_Flaky = Pass_Rate > flaky_threshold & Pass_Rate < (1 - flaky_threshold),
+    .groups = "drop"
+  )
+
+flaky_count <- sum(flaky_analysis$Is_Flaky, na.rm = TRUE)
+flaky_tests <- flaky_analysis %>% filter(Is_Flaky == TRUE) %>% pull(`Run Type`)
+
+valueBox(
+  value = flaky_count,
+  caption = vb_caption(
+    "Flaky Tests (30d)",
+    ifelse(flaky_count > 0, paste0("Tests with 20-80% pass rate: ", paste(flaky_tests, collapse = ", ")), "No flaky tests detected")
+  ),
+  color = ifelse(flaky_count == 0, "success", ifelse(flaky_count <= 2, "warning", "danger"))
+)
+```
+
+### Test Stability Score
+
+```{r stability_score_kpi}
+# Calculate overall stability: percentage of tests that are NOT flaky
+if (nrow(flaky_analysis) > 0) {
+  stability_score <- (sum(!flaky_analysis$Is_Flaky, na.rm = TRUE) / nrow(flaky_analysis))
+} else {
+  stability_score <- 1
+}
+
+valueBox(
+  value = scales::percent(stability_score, accuracy = 1),
+  caption = vb_caption(
+    "Test Stability Score",
+    paste0("Percentage of stable tests (flip rate < 20%)")
+  ),
+  color = ifelse(stability_score >= 0.90, "success", ifelse(stability_score >= 0.75, "warning", "danger"))
+)
+```
+
+### Needs Investigation
+
+```{r needs_investigation_kpi}
+investigate_count <- flaky_analysis %>%
+  filter(Pass_Rate >= 0.05 & Pass_Rate <= 0.95 & Total_Runs >= 5) %>%
+  nrow()
+
+valueBox(
+  value = investigate_count,
+  caption = vb_caption(
+    "Tests Needing Review",
+    "Tests with 5-95% pass rate and 5+ runs"
+  ),
+  color = ifelse(investigate_count == 0, "success", "warning")
+)
+```
+
+Row {data-height=500}
+-------------------------------------
+
+### Test Pass Rate Distribution
+
+```{r flaky_distribution}
+# Show distribution of pass rates across all tests
+df <- runs_data %>%
+  filter(Run_Day >= Sys.Date() - days(30)) %>%
+  group_by(`Run Type`) %>%
+  summarise(
+    Total = n(),
+    Passed = sum(Result == "Pass"),
+    Pass_Rate = ifelse(Total > 0, Passed / Total, NA),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(Pass_Rate), Total >= 3)
+
+if (nrow(df) == 0) {
+  plotly_empty(type = "bar") %>%
+    layout(title = plotly_title("Test Pass Rate Distribution (Last 30 Days)"))
+} else {
+  # Categorize tests
+  df <- df %>%
+    mutate(
+      Category = case_when(
+        Pass_Rate >= 0.95 ~ "Stable (Pass)",
+        Pass_Rate <= 0.05 ~ "Stable (Fail)",
+        Pass_Rate >= 0.20 & Pass_Rate <= 0.80 ~ "Flaky",
+        TRUE ~ "Marginally Stable"
+      ),
+      Category = factor(Category, levels = c("Stable (Pass)", "Marginally Stable", "Flaky", "Stable (Fail)"))
+    )
+  
+  # Color by category
+  cat_colors <- c(
+    "Stable (Pass)" = "#009E73",
+    "Marginally Stable" = "#E69F00", 
+    "Flaky" = "#D55E00",
+    "Stable (Fail)" = "#7F7F7F"
+  )
+  
+  plot_ly(
+    data = df,
+    x = ~reorder(`Run Type`, Pass_Rate),
+    y = ~Pass_Rate,
+    color = ~Category,
+    colors = cat_colors,
+    type = "bar",
+    marker = list(line = list(color = "#1f1f1f", width = 1)),
+    hovertemplate = paste0(
+      "Test: %{x}<br>",
+      "Pass Rate: %{y:.1%}<br>",
+      "Runs: %{customdata}<extra></extra>"
+    ),
+    customdata = ~Total
+  ) %>%
+    layout(
+      title = plotly_title("Test Pass Rate Distribution (Last 30 Days)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(
+        title = "",
+        showgrid = FALSE,
+        tickangle = 45
+      ),
+      yaxis = list(
+        title = "Pass Rate",
+        tickformat = ".0%",
+        showgrid = TRUE,
+        gridcolor = "#333333",
+        range = c(0, 1)
+      ),
+      legend = list(
+        orientation = "h",
+        x = 0.5,
+        y = -0.2,
+        xanchor = "center",
+        font = list(color = "#ffffff")
+      )
+    ) %>%
+    add_plotly_border()
+}
+```
+
+Row {data-height=500}
+-------------------------------------
+
+### Tests Requiring Attention
+
+```{r flaky_tests_table}
+# Table of flaky/marginal tests
+df <- runs_data %>%
+  filter(Run_Day >= Sys.Date() - days(30)) %>%
+  group_by(`Run Type`) %>%
+  summarise(
+    Total_Runs = n(),
+    Passed = sum(Result == "Pass"),
+    Failed = sum(Result == "Fail"),
+    Pass_Rate = Passed / Total_Runs,
+    Flip_Rate = 2 * min(Passed, Failed) / Total_Runs,
+    .groups = "drop"
+  ) %>%
+  filter(Total_Runs >= 5, Pass_Rate > 0.05, Pass_Rate < 0.95) %>%
+  arrange(Pass_Rate) %>%
+  mutate(
+    Priority = case_when(
+      Pass_Rate < 0.20 | Pass_Rate > 0.80 ~ "Low",
+      Pass_Rate < 0.35 | Pass_Rate > 0.65 ~ "Medium",
+      TRUE ~ "High"
+    )
+  )
+
+if (nrow(df) == 0) {
+  cat("No tests requiring attention (need 5+ runs with 5-95% pass rate)")
+} else {
+  reactable(
+    df,
+    theme = REACTABLE_THEME_DARK,
+    searchable = TRUE,
+    pagination = TRUE,
+    defaultPageSize = 10,
+    highlight = TRUE,
+    bordered = TRUE,
+    compact = TRUE,
+    defaultSorted = "Flip_Rate",
+    defaultSortOrder = "desc",
+    defaultColDef = colDef(vAlign = "top"),
+    columns = list(
+      `Run Type` = colDef(width = 250, minWidth = 200),
+      Total_Runs = colDef(width = 100, name = "Runs"),
+      Passed = colDef(width = 80),
+      Failed = colDef(width = 80),
+      Pass_Rate = colDef(
+        width = 100,
+        name = "Pass Rate",
+        cell = function(value) scales::percent(value, accuracy = 0.1)
+      ),
+      Flip_Rate = colDef(
+        width = 100,
+        name = "Flip Rate",
+        cell = function(value) scales::percent(value, accuracy = 0.1)
+      ),
+      Priority = colDef(
+        width = 100,
+        cell = function(value) {
+          color <- switch(value, "High" = "#D55E00", "Medium" = "#E69F00", "#009E73")
+          htmltools::div(
+            style = list(
+              display = "inline-block",
+              padding = "3px 10px",
+              borderRadius = "999px",
+              background = color,
+              color = "#111111",
+              fontWeight = 700,
+              fontSize = "12px"
+            ),
+            value
+          )
+        }
+      )
+    )
+  )
+}
 ```
