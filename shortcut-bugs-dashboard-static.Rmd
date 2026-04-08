@@ -19,6 +19,7 @@ library(googlesheets4)
 library(reactable)
 library(htmltools)
 library(DT)
+library(zoo)  # For rolling averages
 
 # ============================
 # CONFIG
@@ -102,6 +103,15 @@ BASE_THEME <- theme_minimal(base_size = 12) +
 # ============================
 # PLOTLY TITLE + BORDER HELPERS
 # ============================
+# flexdashboard caption helper for title + detail
+vb_caption <- function(title, detail) {
+  HTML(sprintf(
+    '<span class="vb-title">%s</span><span class="vb-detail">%s</span>',
+    htmlEscape(title),
+    htmlEscape(detail, attribute = FALSE)
+  ))
+}
+
 plotly_title <- function(text) {
   list(
     text = paste0("<b>", text, "</b>"),
@@ -285,6 +295,43 @@ clean_releases <- function(df) {
     select(Date, Type)
 }
 
+# ============================
+# PRODUCTION ESCAPE ANALYSIS
+# ============================
+# Detect if a bug likely escaped to production based on:
+# 1. Hotfix release occurred after bug creation
+# 2. Bug was created close to a hotfix date
+analyze_production_escapes <- function(bugs_df, releases_df, escape_window_days = 7) {
+  if (nrow(releases_df) == 0 || nrow(bugs_df) == 0) {
+    return(bugs_df %>% mutate(Escaped_To_Production = FALSE, Days_To_Escape = NA_integer_))
+  }
+  
+  bugs_df %>%
+    mutate(Escaped_To_Production = map_lgl(`Created At`, function(bug_date) {
+      if (is.na(bug_date)) return(FALSE)
+      any(abs(as.Date(releases_df$Date) - as.Date(bug_date)) <= escape_window_days, na.rm = TRUE)
+    })) %>%
+    mutate(
+      Days_To_Escape = if_else(
+        Escaped_To_Production,
+        as.integer(map_int(`Created At`, function(bug_date) {
+          if (is.na(bug_date)) return(NA_integer_)
+          closest_release <- releases_df$Date[which.min(abs(as.Date(releases_df$Date) - as.Date(bug_date)))]
+          as.integer(abs(closest_release - as.Date(bug_date)))
+        })),
+        NA_integer_
+      )
+    )
+}
+
+# Calculate escape rate metric
+calc_escape_rate <- function(bugs_df) {
+  total <- nrow(bugs_df)
+  escaped <- sum(bugs_df$Escaped_To_Production, na.rm = TRUE)
+  rate <- if (total > 0) escaped / total else 0
+  list(total = total, escaped = escaped, rate = rate)
+}
+
 clean_qa_snapshots <- function(df) {
   if (!("Date/Time" %in% names(df))) {
     dt_col <- names(df)[tolower(names(df)) %in% c("date/time", "datetime", "date time", "timestamp")]
@@ -332,6 +379,12 @@ QA_RAW       <- read_qa_snapshots()
 
 BUGS_DATA     <- BUGS_RAW %>% clean_bugs()
 RELEASES_DATA <- RELEASES_RAW %>% clean_releases()
+
+# Apply production escape analysis to bugs
+BUGS_DATA <- BUGS_DATA %>% analyze_production_escapes(RELEASES_DATA)
+
+# Calculate escape rate
+escape_metrics <- calc_escape_rate(BUGS_DATA)
 QA_STATE_DATA <- QA_RAW %>% clean_qa_snapshots()
 
 # Bugs: top-level vs sub-task (Parent ID empty/missing => Bug; else Sub-Task Bug)
@@ -667,6 +720,111 @@ if (nrow(df) == 0) {
       ),
       yaxis = list(title = "Total Created Bugs", showgrid = TRUE, gridcolor = "#333333"),
       legend = list(font = list(color = "#ffffff"))
+    )
+}
+
+Production Escapes
+=====================================
+
+Row {data-height=200}
+-------------------------------------
+
+### Defect Escape Rate (Last 90 Days)
+
+```{r escape_rate_kpi}
+escape_90d <- BUGS_DATA %>%
+  filter(`Created At` >= Sys.Date() - days(90)) %>%
+  calc_escape_rate()
+
+valueBox(
+  value = scales::percent(escape_90d$rate, accuracy = 0.1),
+  caption = vb_caption(
+    "Escape Rate (90d)",
+    paste0(escape_90d$escaped, " escaped / ", escape_90d$total, " total bugs")
+  ),
+  color = ifelse(escape_90d$rate <= 0.05, "success", ifelse(escape_90d$rate <= 0.10, "warning", "danger"))
+)
+```
+
+### Bugs Likely Escaped to Production
+
+```{r escaped_bugs_count}
+escaped_count <- sum(BUGS_DATA$Escaped_To_Production, na.rm = TRUE)
+
+valueBox(
+  value = escaped_count,
+  caption = vb_caption(
+    "Total Escaped Bugs",
+    "Bugs created within 7 days of a hotfix"
+  ),
+  color = ifelse(escaped_count == 0, "success", "warning")
+)
+```
+
+### Average Days to Escape
+
+```{r avg_days_to_escape}
+avg_days <- BUGS_DATA %>% 
+  filter(Escaped_To_Production == TRUE, !is.na(Days_To_Escape)) %>%
+  summarise(avg = mean(Days_To_Escape, na.rm = TRUE)) %>%
+  pull(avg)
+
+valueBox(
+  value = ifelse(is.na(avg_days), "N/A", round(avg_days, 1)),
+  caption = vb_caption(
+    "Avg Days to Escape",
+    "Time from bug creation to nearest hotfix"
+  ),
+  color = "primary"
+)
+```
+
+Row {data-height=500}
+-------------------------------------
+
+### Bugs by Product (Production Escapes Highlighted)
+
+```{r escape_by_product}
+df <- BUGS_DATA %>%
+  filter(!is.na(Product)) %>%
+  mutate(Week = floor_date(`Created At`, "week")) %>%
+  filter(Week >= Sys.Date() - weeks(26))
+
+if (nrow(df) == 0) {
+  plotly_empty(type = "bar") %>% layout(title = plotly_title("Production Escapes by Product"))
+} else {
+  agg <- df %>%
+    count(Product, Escaped_To_Production, name = "Count") %>%
+    group_by(Product) %>%
+    mutate(Total = sum(Count)) %>%
+    ungroup() %>%
+    arrange(desc(Total), Product)
+  
+  plot_ly(
+    data = agg,
+    x = ~Product,
+    y = ~Count,
+    color = ~Escaped_To_Production,
+    colors = c("FALSE" = "#009E73", "TRUE" = "#D55E00"),
+    type = "bar",
+    hovertemplate = paste0(
+      "Product: %{x}<br>",
+      "Escaped: %{color}<br>",
+      "Count: %{y}<extra></extra>"
+    )
+  ) %>%
+    layout(
+      barmode = "stack",
+      title = plotly_title("Production Escapes by Product (Last 26 Weeks)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(showgrid = FALSE),
+      yaxis = list(showgrid = TRUE, gridcolor = "#333333"),
+      legend = list(
+        orientation = "h",
+        title = list(text = "Escaped?"),
+        font = list(color = "#ffffff")
+      )
     )
 }
 ```
