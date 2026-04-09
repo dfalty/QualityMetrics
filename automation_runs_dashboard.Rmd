@@ -19,6 +19,7 @@ library(plotly)
 library(googlesheets4)
 library(scales)
 library(htmltools)
+library(zoo)  # For rolling averages
 
 # flexdashboard: passing caption= replaces the whole caption and drops the ### title — keep both via HTML
 vb_caption <- function(title, detail) {
@@ -88,6 +89,54 @@ add_plotly_border <- function(p, color = "#333333", width = 1) {
 GOAL_LINE_COLOR <- "#882255"
 AUTOMATION_PASS_RATE_GOAL <- 0.85
 RELEASE_PASS_RATE_GOAL <- 0.95
+
+# ============================
+# TREND ANALYSIS HELPERS
+# ============================
+# Rolling average calculation
+calc_rolling_avg <- function(df, date_col, value_col, window_days = 7) {
+  df %>%
+    mutate({{ date_col }} := as.Date({{ date_col }})) %>%
+    arrange({{ date_col }}) %>%
+    mutate(
+      rolling_avg = roll_mean({{ value_col }},
+        n = window_days,
+        align = "right",
+        fill = NA
+      )
+    )
+}
+
+# Linear regression trend line
+calc_trend_line <- function(df, date_col, value_col) {
+  df <- df %>% mutate({{ date_col }} := as.Date({{ date_col }}))
+  df <- df %>% mutate(day_num = as.numeric({{ date_col }} - min({{ date_col }}, na.rm = TRUE)))
+  
+  valid <- df %>% filter(!is.na({{ value_col }}) & !is.na(day_num))
+  if (nrow(valid) < 2) return(df %>% mutate(trend = NA_real_))
+  
+  model <- lm(as.formula(paste0("`", value_col, "` ~ day_num")), data = valid)
+  df <- df %>% mutate(trend = predict(model, newdata = df))
+  
+  df %>% select(-day_num)
+}
+
+# Trend direction indicator
+get_trend_direction <- function(df, value_col) {
+  if (nrow(df) < 2) return("stable")
+  
+  recent <- df %>% filter(!is.na({{ value_col }})) %>% tail(7)
+  if (nrow(recent) < 2) return("stable")
+  
+  first_val <- recent %>% head(1) %>% pull({{ value_col }})
+  last_val <- recent %>% tail(1) %>% pull({{ value_col }})
+  
+  diff_pct <- (last_val - first_val) / first_val
+  
+  if (diff_pct > 0.02) return("improving")
+  if (diff_pct < -0.02) return("declining")
+  "stable"
+}
 
 pass_rate_goal_gg_hline <- function(yintercept) {
   geom_hline(
@@ -315,34 +364,47 @@ monthly_df <- runs_data %>%
     Avg_Pass_Rate = Passed / Total,
     .groups = "drop"
   ) %>%
-  arrange(Month)
-
-p <- ggplot(
-  monthly_df,
-  aes(
-    Month,
-    Avg_Pass_Rate,
-    group = 1,
-    text = paste0(
-      "Month: ", format(Month, "%b %Y"),
-      "<br>Avg Pass Rate: ", scales::percent(Avg_Pass_Rate, accuracy = 0.1)
-    )
+  arrange(Month) %>%
+  mutate(
+    Rolling_Avg_3M = roll_mean(Avg_Pass_Rate, n = 3, align = "right", fill = NA)
   )
-) +
+
+# Calculate trend
+monthly_df <- monthly_df %>%
+  mutate(Month_num = as.numeric(Month - min(Month, na.rm = TRUE)))
+valid_data <- monthly_df %>% filter(!is.na(Avg_Pass_Rate) & !is.na(Month_num))
+if (nrow(valid_data) >= 2) {
+  model <- lm(Avg_Pass_Rate ~ Month_num, data = valid_data)
+  monthly_df <- monthly_df %>% mutate(Trend_Line = predict(model, newdata = monthly_df))
+} else {
+  monthly_df <- monthly_df %>% mutate(Trend_Line = NA_real_)
+}
+monthly_df <- monthly_df %>% select(-Month_num)
+
+# Trend direction
+trend_dir <- get_trend_direction(monthly_df, Avg_Pass_Rate)
+trend_emoji <- switch(trend_dir, "improving" = "📈", "declining" = "📉", "stable" = "➡️")
+
+p <- ggplot(monthly_df, aes(Month, Avg_Pass_Rate, group = 1)) +
+  geom_line(aes(y = Trend_Line), color = "#E69F00", linewidth = 1.5, linetype = "dashed", alpha = 0.7, na.rm = TRUE) +
   geom_line(color = "#5bc0de", linewidth = 1) +
   geom_point(color = "#5bc0de", size = 2) +
+  geom_line(aes(y = Rolling_Avg_3M), color = "#009E73", linewidth = 1.5, linetype = "solid", na.rm = TRUE) +
   pass_rate_goal_gg_hline(AUTOMATION_PASS_RATE_GOAL) +
   scale_y_continuous(labels = percent, limits = c(0, 1)) +
   labs(x = NULL, y = "Average Pass Rate") +
   BASE_THEME
 
-ggplotly(p, tooltip = "text") %>%
+ggplotly(p, tooltip = c("text", "y")) %>%
   layout(
-    title = plotly_title("Average Passing Rate per Month"),
+    title = list(text = paste0("<b>Average Passing Rate per Month ", trend_emoji, "</b>"), x = 0.02, xanchor = "left"),
     plot_bgcolor = "#1f1f1f",
     paper_bgcolor = "#1f1f1f",
     yaxis = list(tickformat = ".0%"),
-    annotations = pass_rate_goal_annotation(AUTOMATION_PASS_RATE_GOAL)
+    annotations = c(
+      pass_rate_goal_annotation(AUTOMATION_PASS_RATE_GOAL),
+      list(x = 0.98, y = 0.05, xref = "paper", yref = "paper", text = "— · · — 3-mo avg", showarrow = FALSE, font = list(color = "#009E73", size = 10))
+    )
   ) %>%
   add_plotly_border()
 ```
@@ -409,20 +471,31 @@ df <- runs_data %>%
     Pass_Rate = Passed / Total,
     .groups = "drop"
   ) %>%
-  arrange(Run_Day)
-
-p <- ggplot(
-  df,
-  aes(
-    Run_Day,
-    Pass_Rate,
-    group = 1,
-    text = paste0(
-      "Run Day: ", Run_Day,
-      "<br>Pass Rate: ", scales::percent(Pass_Rate, accuracy = 0.1)
-    )
+  arrange(Run_Day) %>%
+  mutate(
+    Rolling_Avg_7D = roll_mean(Pass_Rate, n = 7, align = "right", fill = NA),
+    Rolling_Avg_30D = roll_mean(Pass_Rate, n = 30, align = "right", fill = NA)
   )
-) +
+
+# Calculate linear trend
+df <- df %>% mutate(Run_Day_num = as.numeric(Run_Day - min(Run_Day, na.rm = TRUE)))
+valid_df <- df %>% filter(!is.na(Pass_Rate) & !is.na(Run_Day_num))
+if (nrow(valid_df) >= 2) {
+  model <- lm(Pass_Rate ~ Run_Day_num, data = valid_df)
+  df <- df %>% mutate(Trend_Line = predict(model, newdata = df))
+} else {
+  df <- df %>% mutate(Trend_Line = NA_real_)
+}
+df <- df %>% select(-Run_Day_num)
+
+# Trend direction
+trend_dir <- get_trend_direction(df, Pass_Rate)
+trend_emoji <- switch(trend_dir, "improving" = "📈", "declining" = "📉", "stable" = "➡️")
+
+p <- ggplot(df, aes(Run_Day, Pass_Rate, group = 1)) +
+  geom_line(aes(y = Trend_Line), color = "#E69F00", linewidth = 1.5, linetype = "dashed", alpha = 0.7, na.rm = TRUE) +
+  geom_line(aes(y = Rolling_Avg_30D), color = "#D55E00", linewidth = 2, linetype = "dotdash", alpha = 0.8, na.rm = TRUE) +
+  geom_line(aes(y = Rolling_Avg_7D), color = "#009E73", linewidth = 1.5, na.rm = TRUE) +
   geom_line(color = "#5bc0de", linewidth = 1) +
   geom_point(color = "#5bc0de", size = 2) +
   pass_rate_goal_gg_hline(AUTOMATION_PASS_RATE_GOAL) +
@@ -435,6 +508,22 @@ p <- ggplot(
       format(latest_run_at, "%b %d, %H:%M", tz = RUNS_TZ),
       RUNS_TZ
     )
+  ) +
+  BASE_THEME
+
+ggplotly(p, tooltip = c("text", "y")) %>%
+  layout(
+    title = list(text = paste0("<b>Daily Pass Rate ", trend_emoji, "</b>"), x = 0.02, xanchor = "left"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    yaxis = list(tickformat = ".0%"),
+    annotations = c(
+      pass_rate_goal_annotation(AUTOMATION_PASS_RATE_GOAL),
+      list(x = 0.98, y = 0.05, xref = "paper", yref = "paper", text = "— 7-day · · — 30-day", showarrow = FALSE, font = list(color = "#777777", size = 9))
+    )
+  ) %>%
+  add_plotly_border()
+```
   ) +
   BASE_THEME
 
