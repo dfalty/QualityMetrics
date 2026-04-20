@@ -19,6 +19,8 @@ library(plotly)
 library(googlesheets4)
 library(scales)
 library(htmltools)
+library(reactable)
+library(htmlwidgets)
 
 # flexdashboard: passing caption= replaces the whole caption and drops the ### title — keep both via HTML
 vb_caption <- function(title, detail) {
@@ -117,6 +119,54 @@ pass_rate_goal_annotation <- function(goal) {
     )
   )
 }
+
+# ============================
+# COVERAGE & AUTOMATION STATUS (CB-safe, single source of truth)
+# Okabe–Ito: bluish green vs vermillion reads as good/bad without a pure red–green scale
+# (see https://jfly.uni-koeln.de/color/ )
+COVERAGE_GRADIENT_LOW <- "#D55E00"   # vermillion — lower coverage
+COVERAGE_GRADIENT_HIGH <- "#009E73" # bluish green — higher coverage
+
+AUTOMATION_STATUS_COLORS <- c(
+  "Automated"       = "#009E73",
+  "Not Automated"   = "#D55E00",
+  "Not Required"    = "#56B4E9",
+  "Cannot Automate" = "#7F7F7F"
+)
+
+# Heatmap / table cells: same endpoints as ggplot coverage gradients, stepped for readability
+.coverage_pct_ramp <- grDevices::colorRampPalette(
+  c(COVERAGE_GRADIENT_LOW, COVERAGE_GRADIENT_HIGH),
+  space = "Lab"
+)(6L)
+
+coverage_heatmap_bin_color <- function(value) {
+  if (is.na(value)) return("transparent")
+  if (value >= 80) return(.coverage_pct_ramp[[6]])
+  if (value >= 60) return(.coverage_pct_ramp[[5]])
+  if (value >= 40) return(.coverage_pct_ramp[[4]])
+  if (value >= 20) return(.coverage_pct_ramp[[3]])
+  if (value > 0)   return(.coverage_pct_ramp[[2]])
+  .coverage_pct_ramp[[1]]
+}
+
+coverage_cell_text_color <- function(bg_hex) {
+  if (identical(bg_hex, "transparent") || is.na(bg_hex)) return("#888888")
+  rgb <- grDevices::col2rgb(bg_hex) / 255
+  lin <- ifelse(rgb <= 0.03928, rgb / 12.92, ((rgb + 0.055) / 1.055)^2.4)
+  lum <- as.numeric(c(0.2126, 0.7152, 0.0722) %*% lin)
+  if (lum < 0.42) "#f5f5f5" else "#121212"
+}
+
+# Failure attribution stacked bars — Paul Tol Bright qualitative (CB-safe)
+# https://personal.sron.nl/~pault/
+ATTRIBUTION_COLORS <- c(
+  "Test Bug"        = "#66CCEE",
+  "Product Change"  = "#CCBB44",
+  "Product Bug"     = "#EE6677",
+  "Platform Issue"  = "#AA3377",
+  "Needs Triage"    = "#BBBBBB"
+)
 
 # ============================
 # DATA
@@ -466,14 +516,6 @@ attribution_levels <- c(
   "Needs Triage"
 )
 
-attribution_colors <- c(
-  "Test Bug" = "#5bc0de",
-  "Product Change" = "#f0ad4e",
-  "Product Bug" = "#d9534f",
-  "Platform Issue" = "#9e56bf",
-  "Needs Triage" = "#7F7F7F"
-)
-
 df <- runs_data %>%
   filter(Result == "Fail") %>%
   mutate(
@@ -495,7 +537,7 @@ p <- ggplot(
   aes(Run_Day, Failures, fill = `Failure Attribution`)
 ) +
   geom_col(width = 0.85) +
-  scale_fill_manual(values = attribution_colors) +
+  scale_fill_manual(values = ATTRIBUTION_COLORS) +
   labs(x = NULL, y = "Failures") +
   BASE_THEME +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
@@ -538,7 +580,10 @@ p <- ggplot(
   )
 ) +
   geom_col(width = 0.85) +
-  scale_fill_manual(values = c("Pass" = "#009E73", "Fail" = "#D55E00")) +
+  scale_fill_manual(values = c(
+    "Pass" = COVERAGE_GRADIENT_HIGH,
+    "Fail" = COVERAGE_GRADIENT_LOW
+  )) +
   labs(x = NULL, y = "Run Count") +
   BASE_THEME +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
@@ -602,4 +647,589 @@ ggplotly(p, tooltip = "text") %>%
     annotations = pass_rate_goal_annotation(RELEASE_PASS_RATE_GOAL)
   ) %>%
   add_plotly_border()
+```
+
+```{r load_browserstack_data, include=FALSE}
+# ============================
+# BROWSERSTACK COVERAGE DATA
+# ============================
+# Try live fetch first; fall back to bundled CSV
+BROWSERSTACK_API_KEY <- Sys.getenv("BROWSERSTACK_API_KEY", unset = "")
+
+if (nzchar(BROWSERSTACK_API_KEY) && file.exists("fetch_browserstack_data.R")) {
+  source("fetch_browserstack_data.R", local = TRUE)
+  bs_data <- tryCatch(fetch_browserstack_test_cases(), error = function(e) NULL)
+}
+
+if (!exists("bs_data") || is.null(bs_data)) {
+  if (file.exists("browserstack_test_cases.csv")) {
+    bs_data <- read.csv("browserstack_test_cases.csv", stringsAsFactors = FALSE)
+  } else {
+    bs_data <- tibble(
+      identifier = character(), title = character(),
+      top_level_folder = character(), second_level_folder = character(),
+      full_path = character(), folder_id = character(),
+      automation_status = character(), priority = character(),
+      status = character(), case_type = character(),
+      owner = character(), created_at = character(),
+      last_updated_at = character()
+    )
+  }
+}
+
+bs_data <- bs_data %>%
+  mutate(
+    automation_status = case_when(
+      automation_status == "automated" ~ "Automated",
+      automation_status == "not_automated" ~ "Not Automated",
+      automation_status == "automation_not_required" ~ "Not Required",
+      automation_status == "cannot_be_automated" ~ "Cannot Automate",
+      TRUE ~ automation_status
+    ),
+    priority = case_when(
+      tolower(priority) %in% c("medium", "meidum", "edium", "medum") ~ "Medium",
+      TRUE ~ priority
+    ),
+    is_automated = automation_status == "Automated"
+  )
+
+total_cases <- nrow(bs_data)
+total_automated <- sum(bs_data$is_automated)
+overall_pct <- if (total_cases > 0) total_automated / total_cases else 0
+```
+
+Coverage Overview
+=====================================
+
+Row {data-height=120}
+-------------------------------------
+
+### Total Test Cases
+
+```{r cov_kpi_total}
+valueBox(
+  value = scales::comma(total_cases),
+  caption = vb_caption(
+    "Total test cases",
+    paste0("Across all product areas in BrowserStack")
+  ),
+  color = "primary"
+)
+```
+
+### Automated
+
+```{r cov_kpi_automated}
+valueBox(
+  value = scales::comma(total_automated),
+  caption = vb_caption(
+    "Automated",
+    paste0(scales::percent(overall_pct, accuracy = 0.1), " of all test cases")
+  ),
+  color = ifelse(overall_pct >= 0.50, "success", ifelse(overall_pct >= 0.25, "warning", "danger"))
+)
+```
+
+### Not Automated
+
+```{r cov_kpi_not_automated}
+not_auto <- sum(bs_data$automation_status == "Not Automated")
+not_auto_pct <- if (total_cases > 0) not_auto / total_cases else 0
+valueBox(
+  value = scales::comma(not_auto),
+  caption = vb_caption(
+    "Not automated",
+    paste0(scales::percent(not_auto_pct, accuracy = 0.1), " — automation opportunity")
+  ),
+  color = ifelse(not_auto_pct <= 0.30, "success", ifelse(not_auto_pct <= 0.60, "warning", "danger"))
+)
+```
+
+### Not Required / Cannot Automate
+
+```{r cov_kpi_excluded}
+excluded <- sum(bs_data$automation_status %in% c("Not Required", "Cannot Automate"))
+excluded_pct <- if (total_cases > 0) excluded / total_cases else 0
+valueBox(
+  value = scales::comma(excluded),
+  caption = vb_caption(
+    "Not required / Cannot automate",
+    paste0(scales::percent(excluded_pct, accuracy = 0.1), " of total")
+  ),
+  color = "primary"
+)
+```
+
+Row {data-height=440}
+-------------------------------------
+
+###
+
+```{r overall_automation_donut}
+status_summary <- bs_data %>%
+  count(automation_status, name = "n") %>%
+  mutate(pct = n / sum(n))
+
+status_pie_colors <- unname(
+  AUTOMATION_STATUS_COLORS[as.character(status_summary$automation_status)]
+)
+status_pie_colors[is.na(status_pie_colors)] <- "#666666"
+
+plot_ly(
+  status_summary,
+  labels = ~automation_status,
+  values = ~n,
+  type = "pie",
+  hole = 0.55,
+  textinfo = "label+percent",
+  textposition = "outside",
+  marker = list(colors = status_pie_colors),
+  hovertemplate = "%{label}<br>Count: %{value}<br>Share: %{percent}<extra></extra>"
+) %>%
+  layout(
+    title = plotly_title("Overall Automation Status Distribution"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    font = list(color = "#e6e6e6"),
+    showlegend = TRUE,
+    legend = list(
+      orientation = "h", x = 0.1, y = -0.1,
+      font = list(color = "#e6e6e6")
+    ),
+    annotations = list(
+      list(
+        text = paste0("<b>", scales::percent(overall_pct, accuracy = 0.1), "</b><br>Automated"),
+        x = 0.5, y = 0.5,
+        xref = "paper", yref = "paper",
+        showarrow = FALSE,
+        font = list(size = 18, color = "#e6e6e6")
+      )
+    )
+  )
+```
+
+###
+
+```{r coverage_by_product_area}
+area_summary <- bs_data %>%
+  group_by(top_level_folder) %>%
+  summarise(
+    Total = n(),
+    Automated = sum(is_automated),
+    Pct = if_else(Total == 0, 0, Automated / Total),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Pct))
+
+p <- ggplot(
+  area_summary,
+  aes(
+    x = reorder(top_level_folder, Pct),
+    y = Pct,
+    fill = Pct,
+    text = paste0(
+      top_level_folder,
+      "<br>Automated: ", Automated, " / ", Total,
+      "<br>Coverage: ", scales::percent(Pct, accuracy = 0.1)
+    )
+  )
+) +
+  geom_col(width = 0.7) +
+  scale_fill_gradient(
+    low = COVERAGE_GRADIENT_LOW,
+    high = COVERAGE_GRADIENT_HIGH,
+    limits = c(0, 1)
+  ) +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  coord_flip() +
+  labs(x = NULL, y = "Automation Coverage %") +
+  BASE_THEME +
+  theme(legend.position = "none")
+
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    title = plotly_title("Automation Coverage by Product Area"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    yaxis = list(tickformat = ".0%")
+  ) %>%
+  add_plotly_border()
+```
+
+Row {data-height=440}
+-------------------------------------
+
+###
+
+```{r priority_automation_breakdown}
+priority_status <- bs_data %>%
+  count(priority, automation_status, name = "n") %>%
+  mutate(
+    priority = factor(priority, levels = c("Critical", "High", "Medium", "Low"))
+  ) %>%
+  filter(!is.na(priority))
+
+p <- ggplot(
+  priority_status,
+  aes(
+    x = priority,
+    y = n,
+    fill = automation_status,
+    text = paste0(
+      "Priority: ", priority,
+      "<br>Status: ", automation_status,
+      "<br>Count: ", n
+    )
+  )
+) +
+  geom_col(position = "stack", width = 0.7) +
+  scale_fill_manual(values = AUTOMATION_STATUS_COLORS, na.value = "#666666") +
+  labs(x = NULL, y = "Test Cases", fill = "Automation Status") +
+  BASE_THEME
+
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    title = plotly_title("Automation Status by Priority"),
+    barmode = "stack",
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    legend = list(orientation = "h", x = 0.02, y = -0.2)
+  ) %>%
+  add_plotly_border()
+```
+
+###
+
+```{r priority_coverage_pct}
+priority_cov <- bs_data %>%
+  group_by(priority) %>%
+  summarise(
+    Total = n(),
+    Automated = sum(is_automated),
+    Pct = if_else(Total == 0, 0, Automated / Total),
+    .groups = "drop"
+  ) %>%
+  mutate(priority = factor(priority, levels = c("Critical", "High", "Medium", "Low"))) %>%
+  filter(!is.na(priority))
+
+p <- ggplot(
+  priority_cov,
+  aes(
+    x = priority,
+    y = Pct,
+    fill = Pct,
+    text = paste0(
+      "Priority: ", priority,
+      "<br>Automated: ", Automated, " / ", Total,
+      "<br>Coverage: ", scales::percent(Pct, accuracy = 0.1)
+    )
+  )
+) +
+  geom_col(width = 0.6) +
+  scale_fill_gradient(
+    low = COVERAGE_GRADIENT_LOW,
+    high = COVERAGE_GRADIENT_HIGH,
+    limits = c(0, 1)
+  ) +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(x = NULL, y = "Automation Coverage %") +
+  BASE_THEME +
+  theme(legend.position = "none")
+
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    title = plotly_title("Automation Coverage % by Priority"),
+    plot_bgcolor = "#1f1f1f",
+    paper_bgcolor = "#1f1f1f",
+    yaxis = list(tickformat = ".0%")
+  ) %>%
+  add_plotly_border()
+```
+
+Coverage Heatmap
+=====================================
+
+Row
+-------------------------------------
+
+###
+
+```{r coverage_heatmap, fig.width=12, fig.height=14}
+# Heatmap: one row per top-level folder; click the row to expand subfolders
+# (second_level_folder) in a nested table. Columns = coverage % by priority.
+
+heatmap_data <- bs_data %>%
+  group_by(top_level_folder, second_level_folder, priority) %>%
+  summarise(
+    Total = n(),
+    Automated = sum(is_automated),
+    .groups = "drop"
+  )
+
+# Total per sub-area (across all priorities)
+area_totals <- bs_data %>%
+  group_by(top_level_folder, second_level_folder) %>%
+  summarise(
+    area_total = n(),
+    area_automated = sum(is_automated),
+    .groups = "drop"
+  ) %>%
+  mutate(Total_Pct = if_else(area_total == 0, NA_real_, 100 * area_automated / area_total))
+
+# Per-priority coverage (leaf rows) — keep pct + raw counts so cells can show both
+priority_pcts <- heatmap_data %>%
+  mutate(pct = if_else(Total == 0, NA_real_, 100 * Automated / Total)) %>%
+  select(top_level_folder, second_level_folder, priority, pct, Automated, Total) %>%
+  rename(auto = Automated, total = Total) %>%
+  pivot_wider(
+    names_from = priority,
+    values_from = c(pct, auto, total),
+    names_glue = "{priority}_{.value}",
+    values_fill = list(pct = NA_real_, auto = 0L, total = 0L)
+  ) %>%
+  rename_with(~ sub("_pct$", "", .x), ends_with("_pct"))
+
+# Child rows: one per (top, second) — shown inside expandable details
+child_df <- area_totals %>%
+  left_join(priority_pcts, by = c("top_level_folder", "second_level_folder")) %>%
+  arrange(top_level_folder, desc(Total_Pct)) %>%
+  mutate(
+    Test_Area = if_else(
+      is.na(second_level_folder) | second_level_folder == "",
+      "\u2014",
+      as.character(second_level_folder)
+    ),
+    Cases = area_total,
+    Total_Pct_auto = area_automated,
+    Total_Pct_total = area_total
+  ) %>%
+  select(
+    top_level_folder, Test_Area, Cases,
+    Total_Pct, Total_Pct_auto, Total_Pct_total,
+    Critical, Critical_auto, Critical_total,
+    High, High_auto, High_total,
+    Medium, Medium_auto, Medium_total,
+    Low, Low_auto, Low_total
+  )
+
+child_by_top <- split(child_df, child_df$top_level_folder)
+
+# Parent rows: rolled up to top_level_folder only
+parent_area_totals <- bs_data %>%
+  group_by(top_level_folder) %>%
+  summarise(
+    area_total = n(),
+    area_automated = sum(is_automated),
+    .groups = "drop"
+  ) %>%
+  mutate(Total_Pct = if_else(area_total == 0, NA_real_, 100 * area_automated / area_total))
+
+parent_priority_pcts <- bs_data %>%
+  group_by(top_level_folder, priority) %>%
+  summarise(Total = n(), Automated = sum(is_automated), .groups = "drop") %>%
+  mutate(pct = if_else(Total == 0, NA_real_, 100 * Automated / Total)) %>%
+  select(top_level_folder, priority, pct, Automated, Total) %>%
+  rename(auto = Automated, total = Total) %>%
+  pivot_wider(
+    names_from = priority,
+    values_from = c(pct, auto, total),
+    names_glue = "{priority}_{.value}",
+    values_fill = list(pct = NA_real_, auto = 0L, total = 0L)
+  ) %>%
+  rename_with(~ sub("_pct$", "", .x), ends_with("_pct"))
+
+parent_df <- parent_area_totals %>%
+  left_join(parent_priority_pcts, by = "top_level_folder") %>%
+  arrange(desc(Total_Pct)) %>%
+  mutate(
+    Test_Area = as.character(top_level_folder),
+    Cases = area_total,
+    Total_Pct_auto = area_automated,
+    Total_Pct_total = area_total
+  ) %>%
+  select(
+    top_level_folder, Test_Area, Cases,
+    Total_Pct, Total_Pct_auto, Total_Pct_total,
+    Critical, Critical_auto, Critical_total,
+    High, High_auto, High_total,
+    Medium, Medium_auto, Medium_total,
+    Low, Low_auto, Low_total
+  )
+
+# Reactable cells: same coverage ramp as bar charts (setup: COVERAGE_GRADIENT_*).
+# Each cell shows two tiers — primary % (drives heatmap color + sort) and a
+# secondary automated/total fraction so readers can judge the denominator.
+# "No cases" at a priority renders as an em-dash with no fill, visually distinct
+# from 0% coverage with cases.
+pct_col_def <- function(display_name, df) {
+  colDef(
+    name = display_name,
+    align = "center",
+    minWidth = 95,
+    cell = function(value, index, name) {
+      auto_col  <- paste0(name, "_auto")
+      total_col <- paste0(name, "_total")
+      auto  <- if (auto_col  %in% names(df)) df[[auto_col]][[index]]  else NA_integer_
+      total <- if (total_col %in% names(df)) df[[total_col]][[index]] else NA_integer_
+
+      if (is.na(total) || total == 0L) {
+        htmltools::div(
+          style = paste(
+            "display:flex;flex-direction:column;align-items:center;",
+            "justify-content:center;line-height:1.1;"
+          ),
+          htmltools::div(style = "font-size:14px;color:#666;", "\u2014"),
+          htmltools::div(style = "font-size:10px;color:#666;opacity:.8;", "no cases")
+        )
+      } else {
+        htmltools::div(
+          style = paste(
+            "display:flex;flex-direction:column;align-items:center;",
+            "justify-content:center;line-height:1.15;",
+            "font-variant-numeric:tabular-nums;"
+          ),
+          htmltools::div(
+            style = "font-size:14px;font-weight:700;",
+            if (is.na(value)) "\u2014" else sprintf("%.0f%%", value)
+          ),
+          htmltools::div(
+            style = "font-size:10px;opacity:.75;",
+            sprintf("%d/%d", as.integer(auto), as.integer(total))
+          )
+        )
+      }
+    },
+    style = function(value, index, name) {
+      total_col <- paste0(name, "_total")
+      total <- if (total_col %in% names(df)) df[[total_col]][[index]] else NA_integer_
+      if (is.na(total) || total == 0L) {
+        list(
+          background = "transparent",
+          color = "#666",
+          textAlign = "center",
+          borderRadius = "2px"
+        )
+      } else {
+        bg <- coverage_heatmap_bin_color(value)
+        fg <- coverage_cell_text_color(bg)
+        list(
+          background = bg,
+          color = fg,
+          fontWeight = "bold",
+          textAlign = "center",
+          borderRadius = "2px"
+        )
+      }
+    }
+  )
+}
+
+hidden_col <- colDef(show = FALSE)
+
+heatmap_theme <- reactableTheme(
+  backgroundColor = "#1f1f1f",
+  color = "#e6e6e6",
+  borderColor = "#333333",
+  stripedColor = "#2a2a2a",
+  highlightColor = "#333333",
+  headerStyle = list(
+    backgroundColor = "#121417",
+    color = "#e6e6e6",
+    fontWeight = "bold",
+    borderBottom = "2px solid #5bc0de"
+  )
+)
+
+parent_columns <- list(
+  top_level_folder = hidden_col,
+  Test_Area = colDef(
+    name = "Test Area",
+    minWidth = 250,
+    style = list(fontWeight = "600")
+  ),
+  Cases = hidden_col,
+  Total_Pct       = pct_col_def("Total",  parent_df),
+  Total_Pct_auto  = hidden_col,
+  Total_Pct_total = hidden_col,
+  Critical        = pct_col_def("Critical", parent_df),
+  Critical_auto   = hidden_col,
+  Critical_total  = hidden_col,
+  High            = pct_col_def("High",     parent_df),
+  High_auto       = hidden_col,
+  High_total      = hidden_col,
+  Medium          = pct_col_def("Medium",   parent_df),
+  Medium_auto     = hidden_col,
+  Medium_total    = hidden_col,
+  Low             = pct_col_def("Low",      parent_df),
+  Low_auto        = hidden_col,
+  Low_total       = hidden_col
+)
+
+# child_columns is rebuilt per-expansion inside details() so pct_col_def closes
+# over the specific sub-frame being rendered (needed for index-based lookups).
+make_child_columns <- function(sub) {
+  list(
+    top_level_folder = hidden_col,
+    Test_Area = colDef(
+      name = "Subfolder",
+      minWidth = 220,
+      style = list(fontWeight = "400", color = "#cccccc")
+    ),
+    Cases = hidden_col,
+    Total_Pct       = pct_col_def("Total",  sub),
+    Total_Pct_auto  = hidden_col,
+    Total_Pct_total = hidden_col,
+    Critical        = pct_col_def("Critical", sub),
+    Critical_auto   = hidden_col,
+    Critical_total  = hidden_col,
+    High            = pct_col_def("High",     sub),
+    High_auto       = hidden_col,
+    High_total      = hidden_col,
+    Medium          = pct_col_def("Medium",   sub),
+    Medium_auto     = hidden_col,
+    Medium_total    = hidden_col,
+    Low             = pct_col_def("Low",      sub),
+    Low_auto        = hidden_col,
+    Low_total       = hidden_col
+  )
+}
+
+reactable(
+  parent_df,
+  defaultSorted = list(Total_Pct = "desc"),
+  defaultPageSize = 60,
+  compact = TRUE,
+  borderless = FALSE,
+  striped = FALSE,
+  highlight = TRUE,
+  theme = heatmap_theme,
+  details = function(index) {
+    i <- if (length(index)) as.integer(index[[1]]) else NA_integer_
+    if (is.na(i) || i < 1L || i > nrow(parent_df)) {
+      return(NULL)
+    }
+    tl <- parent_df$top_level_folder[[i]]
+    sub <- child_by_top[[tl]]
+    if (is.null(sub) || nrow(sub) == 0L) {
+      return(div(
+        style = "padding:10px 2rem;color:#888;font-size:13px;",
+        "No subfolder rows for this area."
+      ))
+    }
+    div(
+      style = "margin:0;padding:6px 0 10px 1.75rem;background:#151515;border-left:2px solid #5bc0de;",
+      reactable(
+        sub,
+        compact = TRUE,
+        borderless = FALSE,
+        striped = FALSE,
+        highlight = FALSE,
+        theme = heatmap_theme,
+        columns = make_child_columns(sub),
+        pagination = FALSE
+      )
+    )
+  },
+  columns = parent_columns
+)
 ```
