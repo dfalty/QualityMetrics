@@ -56,6 +56,11 @@ HIERARCHY_COLORS <- c(
   "Sub-task Bug" = "#009E73"
 )
 
+HOTFIX_COLORS <- c(
+  "Hotfix"            = "#E69F00",  # orange
+  "Non-Impact Hotfix" = "#009E73"   # green
+)
+
 severity_levels <- c(
   "S0 - Critical",
   "S1 - High",
@@ -281,7 +286,14 @@ clean_releases <- function(df) {
       Type = stringr::str_trim(as.character(.data[[type_col]]))
     ) %>%
     filter(!is.na(Date), !is.na(Type)) %>%
-    filter(tolower(Type) == "hotfix") %>%
+    mutate(
+      Type = case_when(
+        tolower(Type) == "hotfix"            ~ "Hotfix",
+        tolower(Type) == "non-impact hotfix" ~ "Non-Impact Hotfix",
+        TRUE                                  ~ Type
+      )
+    ) %>%
+    filter(Type %in% c("Hotfix", "Non-Impact Hotfix")) %>%
     select(Date, Type)
 }
 
@@ -701,24 +713,34 @@ if (nrow(df) == 0) {
     )
 } else {
   agg <- df %>%
-    count(Month, name = "Hotfixes") %>%
-    right_join(tibble(Month = month_seq), by = "Month") %>%
-    mutate(Hotfixes = replace_na(Hotfixes, 0)) %>%
-    arrange(Month)
+    count(Month, Type, name = "n") %>%
+    complete(Month = month_seq, Type = names(HOTFIX_COLORS), fill = list(n = 0)) %>%
+    arrange(Month, Type)
 
-  plot_ly(
-    data = agg,
-    x = ~Month,
-    y = ~Hotfixes,
-    type = "scatter",
-    mode = "lines+markers",
-    line = list(color = "#D55E00", width = 3, shape = "spline", smoothing = 0.4),
-    marker = list(color = "#D55E00", size = 8),
-    hovertemplate = paste0(
-      "Month: %{x|%Y-%b}<br>",
-      "Hotfixes: %{y}<extra></extra>"
-    )
-  ) %>%
+  plt <- plot_ly()
+  for (htype in names(HOTFIX_COLORS)) {
+    d <- agg %>% filter(Type == htype)
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~n,
+        type = "scatter",
+        mode = "lines",
+        line = list(width = 0.5),
+        stackgroup = "one",
+        name = htype,
+        fillcolor = HOTFIX_COLORS[[htype]],
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Hotfixes: %{y}<br>",
+          "Type: ", htype,
+          "<extra></extra>"
+        )
+      )
+  }
+
+  plt %>%
     layout(
       title = plotly_title("Hotfix Counts by Month (YTD)"),
       plot_bgcolor = "#1f1f1f",
@@ -735,7 +757,8 @@ if (nrow(df) == 0) {
         showgrid = TRUE,
         gridcolor = "#333333",
         rangemode = "tozero"
-      )
+      ),
+      legend = list(font = list(color = "#ffffff"))
     )
 }
 ```
