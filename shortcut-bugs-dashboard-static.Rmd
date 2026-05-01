@@ -365,7 +365,7 @@ COMPLETED_WORK_DATA <- bind_rows(
   mutate(Story_Points = replace_na(Story_Points, 0))
 ```
 
-Bugs:Product
+Bugs
 =====================================
 
 <!--  
@@ -520,109 +520,6 @@ Row
 -------------------------------------
 ###
 
-```{r weekly_bugs_product_final_hover}
-library(plotly)
-library(dplyr)
-library(tidyr)
-library(lubridate)
-library(stringr)
-
-# 1. DEFINE THE WINDOW
-today_date <- Sys.Date()
-end_week   <- as.Date(floor_date(today_date, "week", week_start = 7))
-start_week <- end_week - weeks(26) 
-
-# 2. PREPARE THE DATA
-df <- BUGS_DATA %>%
-  mutate(
-    # Convert to Date to remove time (Fixes Spikes)
-    Week = as.Date(floor_date(`Created At`, "week", week_start = 7)),
-    Product = if_else(is.na(Product) | Product == "", "Unspecified", str_trim(Product))
-  ) %>%
-  filter(Week >= start_week, Week <= end_week)
-
-# 3. CHECK FOR EMPTY DATA
-if (nrow(df) == 0) {
-  plotly_empty(type = "scatter") %>%
-    layout(title = "No Data Found")
-} else {
-
-  # 4. FILL GAPS
-  product_levels <- names(PRODUCT_COLORS)
-  
-  agg <- df %>%
-    count(Week, Product, name = "n") %>%
-    complete(
-      Week = seq.Date(start_week, end_week, by = "week"),
-      Product = product_levels, 
-      fill = list(n = 0)
-    ) %>%
-    arrange(Week, Product)
-
-  # 5. PLOT
-  plt <- plot_ly()
-
-  for (prod in product_levels) {
-    d <- agg %>% filter(Product == prod)
-
-    plt <- plt %>%
-      add_trace(
-        data = d,
-        x = ~Week,
-        y = ~n,
-        type = "scatter",
-        mode = "lines",
-        stackgroup = "one",
-        name = prod,
-        line = list(
-          color = PRODUCT_COLORS[[prod]],
-          width = 0.5,
-          shape = "spline", 
-          smoothing = 0.5
-        ),
-        fillcolor = PRODUCT_COLORS[[prod]],
-        hovertemplate = paste0(
-          "Week: %{x|%b %d}<br>",
-          "Bugs: %{y}<br>",
-          "Product: ", prod,
-          "<extra></extra>"
-        )
-      )
-  }
-
-  plt %>%
-    layout(
-      title = plotly_title("Weekly Bugs by Product (Last 6 Months)"),
-      plot_bgcolor = "#1f1f1f",
-      paper_bgcolor = "#1f1f1f",
-      
-      # --- HOVER FIX IS HERE ---
-      hovermode = "closest",  # Changed from "x unified" to "closest"
-      # -------------------------
-      
-      xaxis = list(
-        type = "date",
-        tickformat = "%b %d",
-        dtick = 7 * 24 * 60 * 60 * 1000,
-        tick0 = start_week,
-        showgrid = TRUE,
-        gridcolor = "#333333"
-      ),
-      yaxis = list(
-        title = "Bugs Created",
-        showgrid = TRUE,
-        gridcolor = "#333333",
-        rangemode = "tozero"
-      ),
-      legend = list(font = list(color = "#ffffff"))
-    )
-}
-```
-
-Bug Hierarchy
-=====================================
-
-###
 ```{r}
 end_month   <- floor_date(Sys.Date(), "month")
 start_month <- end_month %m-% months(11)
@@ -678,6 +575,153 @@ if (nrow(df) == 0) {
         gridcolor = "#333333"
       ),
       yaxis = list(title = "Total Created Bugs", showgrid = TRUE, gridcolor = "#333333"),
+      legend = list(font = list(color = "#ffffff"))
+    )
+}
+```
+
+Bugs:Product
+=====================================
+
+Row
+-------------------------------------
+###
+
+```{r monthly_subtask_bugs_by_product}
+end_month   <- floor_date(Sys.Date(), "month")
+start_month <- end_month %m-% months(11)
+month_seq   <- seq.Date(start_month, end_month, by = "1 month")
+
+df <- BUGS_DATA %>%
+  filter(Hierarchy_Type == "Sub-task Bug") %>%
+  mutate(Month = floor_date(`Created At`, "month")) %>%
+  filter(Month >= start_month, Month <= end_month)
+
+if (nrow(df) == 0) {
+  plotly_empty(type = "scatter") %>%
+    layout(title = plotly_title("Monthly Sub-task Bugs by Product (Last 12 Months)"))
+} else {
+
+  product_levels <- names(PRODUCT_COLORS)
+  product_colors <- PRODUCT_COLORS
+  if ("Unspecified" %in% names(product_colors)) {
+    product_colors["Unspecified"] <- "#777777"
+  }
+
+  agg <- df %>%
+    count(Month, Product, name = "n") %>%
+    complete(Month = month_seq, Product = product_levels, fill = list(n = 0)) %>%
+    arrange(Month, Product)
+
+  plt <- plot_ly()
+  for (prod in product_levels) {
+    d <- agg %>% filter(Product == prod)
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~n,
+        type = "scatter",
+        mode = "lines",
+        line = list(color = product_colors[[prod]], width = 0.5),
+        stackgroup = "one",
+        name = prod,
+        fillcolor = product_colors[[prod]],
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Sub-task Bugs: %{y}<br>",
+          "Product: ", prod,
+          "<extra></extra>"
+        )
+      )
+  }
+
+  plt %>%
+    layout(
+      title = plotly_title("Monthly Sub-task Bugs by Product (Last 12 Months)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        tick0 = format(start_month, "%Y-%m-%d"),
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(showgrid = TRUE, gridcolor = "#333333"),
+      legend = list(font = list(color = "#ffffff"))
+    )
+}
+```
+
+Row
+-------------------------------------
+###
+
+```{r monthly_regular_bugs_by_product}
+end_month   <- floor_date(Sys.Date(), "month")
+start_month <- end_month %m-% months(11)
+month_seq   <- seq.Date(start_month, end_month, by = "1 month")
+
+df <- BUGS_DATA %>%
+  filter(Hierarchy_Type == "Regular Bug") %>%
+  mutate(Month = floor_date(`Created At`, "month")) %>%
+  filter(Month >= start_month, Month <= end_month)
+
+if (nrow(df) == 0) {
+  plotly_empty(type = "scatter") %>%
+    layout(title = plotly_title("Monthly Bugs (Non Sub-task) by Product (Last 12 Months)"))
+} else {
+
+  product_levels <- names(PRODUCT_COLORS)
+  product_colors <- PRODUCT_COLORS
+  if ("Unspecified" %in% names(product_colors)) {
+    product_colors["Unspecified"] <- "#777777"
+  }
+
+  agg <- df %>%
+    count(Month, Product, name = "n") %>%
+    complete(Month = month_seq, Product = product_levels, fill = list(n = 0)) %>%
+    arrange(Month, Product)
+
+  plt <- plot_ly()
+  for (prod in product_levels) {
+    d <- agg %>% filter(Product == prod)
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~n,
+        type = "scatter",
+        mode = "lines",
+        line = list(color = product_colors[[prod]], width = 0.5),
+        stackgroup = "one",
+        name = prod,
+        fillcolor = product_colors[[prod]],
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Bugs: %{y}<br>",
+          "Product: ", prod,
+          "<extra></extra>"
+        )
+      )
+  }
+
+  plt %>%
+    layout(
+      title = plotly_title("Monthly Bugs (Non Sub-task) by Product (Last 12 Months)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        tick0 = format(start_month, "%Y-%m-%d"),
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(showgrid = TRUE, gridcolor = "#333333"),
       legend = list(font = list(color = "#ffffff"))
     )
 }
