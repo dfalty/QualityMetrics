@@ -1099,6 +1099,11 @@ closed_states <- c("done", "closed", "completed", "complete")
 
 df <- BUGS_DATA
 
+# Exclude sub-task bugs (only show top-level bugs on this page)
+if ("Parent ID" %in% names(df)) {
+  df <- df %>% filter(is.na(`Parent ID`) | `Parent ID` == "")
+}
+
 # Defensive cleaning for filtering
 df <- df %>%
   mutate(
@@ -1175,6 +1180,11 @@ df <- BUGS_DATA
 
 if ("Story Type" %in% names(df)) {
   df <- df %>% filter(tolower(stringr::str_trim(as.character(`Story Type`))) == "bug")
+}
+
+# Exclude sub-task bugs (only show top-level bugs on this page)
+if ("Parent ID" %in% names(df)) {
+  df <- df %>% filter(is.na(`Parent ID`) | `Parent ID` == "")
 }
 
 if ("State" %in% names(df)) {
