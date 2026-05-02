@@ -727,6 +727,151 @@ if (nrow(df) == 0) {
 }
 ```
 
+Product
+=====================================
+
+```{r product_tab_data_prep, include=FALSE}
+prep_created_with_product <- function(df, type_label) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(tibble(
+      `Created At` = as.POSIXct(character(), tz = "UTC"),
+      Product = character(),
+      Type = character()
+    ))
+  }
+
+  if (!("Created At" %in% names(df))) df$`Created At` <- NA_character_
+  if (!("Product"    %in% names(df))) df$Product       <- NA_character_
+
+  df %>%
+    mutate(
+      `Created At` = parse_date_time(
+        `Created At`,
+        orders = c("ymd HMS", "mdy HMS", "ymd HM", "mdy HM", "ymd", "mdy"),
+        tz = "UTC"
+      ),
+      Product = if_else(is.na(Product) | Product == "", "Unspecified", str_trim(Product)),
+      Type = type_label
+    ) %>%
+    filter(!is.na(`Created At`)) %>%
+    select(`Created At`, Product, Type)
+}
+
+bugs_top_level_created <- bugs_for_completed %>%
+  filter(is.na(`Parent ID`) | `Parent ID` == "")
+bugs_subtasks_created <- bugs_for_completed %>%
+  filter(!is.na(`Parent ID`) & `Parent ID` != "")
+
+CREATED_TICKETS_BY_PRODUCT <- bind_rows(
+  prep_created_with_product(bugs_top_level_created, "Bug"),
+  prep_created_with_product(bugs_subtasks_created,  "Sub-Task Bug"),
+  prep_created_with_product(FEATURES_RAW,           "Feature"),
+  prep_created_with_product(CHORES_RAW,             "Chore")
+) %>%
+  mutate(Month = floor_date(`Created At`, "month"))
+
+plot_tickets_by_type_for_products <- function(products, title_text) {
+  end_month   <- floor_date(Sys.Date(), "month")
+  start_month <- end_month %m-% months(11)
+  month_seq   <- seq.Date(start_month, end_month, by = "1 month")
+
+  type_levels <- names(WORKTYPE_COLORS)
+
+  df <- CREATED_TICKETS_BY_PRODUCT %>%
+    filter(Product %in% products) %>%
+    mutate(Type = factor(Type, levels = type_levels)) %>%
+    filter(Month >= start_month, Month <= end_month)
+
+  if (nrow(df) == 0) {
+    return(
+      plotly_empty(type = "bar") %>%
+        layout(title = plotly_title(title_text))
+    )
+  }
+
+  agg <- df %>%
+    count(Month, Type, name = "Count") %>%
+    complete(Month = month_seq, Type = type_levels, fill = list(Count = 0)) %>%
+    arrange(Month, Type)
+
+  plt <- plot_ly()
+  for (t in type_levels) {
+    d <- agg %>% filter(Type == t)
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~Count,
+        type = "bar",
+        name = t,
+        marker = list(color = WORKTYPE_COLORS[[t]]),
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Type: ", t, "<br>",
+          "Tickets: %{y}<extra></extra>"
+        )
+      )
+  }
+
+  plt %>%
+    layout(
+      barmode = "stack",
+      title = plotly_title(title_text),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      margin = list(b = 60),
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        tick0 = format(start_month, "%Y-%m-%d"),
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(
+        title = "Tickets Created",
+        showgrid = TRUE,
+        gridcolor = "#333333",
+        rangemode = "tozero"
+      ),
+      legend = list(orientation = "h", x = 0.02, y = -0.15)
+    )
+}
+```
+
+Row
+-------------------------------------
+###
+
+```{r product_tab_platform}
+plot_tickets_by_type_for_products(
+  products   = c("Platform"),
+  title_text = "Platform: Monthly Tickets by Type (Last 12 Months)"
+)
+```
+
+Row
+-------------------------------------
+###
+
+```{r product_tab_tax_roth}
+plot_tickets_by_type_for_products(
+  products   = c("Tax", "Roth"),
+  title_text = "Tax + Roth: Monthly Tickets by Type (Last 12 Months)"
+)
+```
+
+Row
+-------------------------------------
+###
+
+```{r product_tab_estate_insurance}
+plot_tickets_by_type_for_products(
+  products   = c("Estate", "Insurance/P&C"),
+  title_text = "Estate + Insurance: Monthly Tickets by Type (Last 12 Months)"
+)
+```
+
 Hotfixes
 =====================================
 
