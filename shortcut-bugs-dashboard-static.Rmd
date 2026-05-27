@@ -31,7 +31,7 @@ SHORTCUT_TICKETS_TAB_BUGS <- Sys.getenv("SHORTCUT_TICKETS_TAB_BUGS", unset = "Bu
 SHORTCUT_TICKETS_TAB_FEATURES <- Sys.getenv("SHORTCUT_TICKETS_TAB_FEATURES", unset = "Features")
 SHORTCUT_TICKETS_TAB_CHORES <- Sys.getenv("SHORTCUT_TICKETS_TAB_CHORES", unset = "Chores")
 SHORTCUT_TICKETS_TAB_RELEASES <- Sys.getenv("SHORTCUT_TICKETS_TAB_RELEASES", unset = "Releases")
-SHORTCUT_TICKETS_TAB_BUGS_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_BUGS_RANGE", unset = "A:I")
+SHORTCUT_TICKETS_TAB_BUGS_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_BUGS_RANGE", unset = "A:J")
 SHORTCUT_TICKETS_TAB_FEATURES_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_FEATURES_RANGE", unset = "A:H")
 SHORTCUT_TICKETS_TAB_CHORES_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_CHORES_RANGE", unset = "A:H")
 SHORTCUT_TICKETS_TAB_RELEASES_RANGE <- Sys.getenv("SHORTCUT_TICKETS_TAB_RELEASES_RANGE", unset = "A:C")
@@ -54,6 +54,10 @@ SEVERITY_COLORS <- c(
 HIERARCHY_COLORS <- c(
   "Regular Bug"  = "#E69F00",
   "Sub-task Bug" = "#009E73"
+)
+
+SEVERITY_STACK_ORDER <- c(
+  "S3 - Low", "S2 - Medium", "S1 - High", "S0 - Critical", "Need Triage"
 )
 
 HOTFIX_COLORS <- c(
@@ -228,6 +232,8 @@ read_releases <- function() {
 
 # ---------- Cleaners ----------
 clean_bugs <- function(df) {
+  if (!("Labels" %in% names(df))) df$Labels <- NA_character_
+
   df %>%
     mutate(
       `Created At` = parse_date_time(
@@ -237,7 +243,8 @@ clean_bugs <- function(df) {
       ),
       Severity = normalize_severity(Severity),
       Product  = if_else(is.na(Product) | Product == "", "Unspecified", str_trim(Product)),
-      Hierarchy_Type = if_else(is.na(`Parent ID`) | `Parent ID` == "", "Regular Bug", "Sub-task Bug")
+      Hierarchy_Type = if_else(is.na(`Parent ID`) | `Parent ID` == "", "Regular Bug", "Sub-task Bug"),
+      Has_CX_Issue = !is.na(Labels) & stringr::str_detect(Labels, stringr::fixed("CX Issue"))
     ) %>%
     filter(!is.na(`Created At`))
 }
@@ -711,6 +718,152 @@ if (nrow(df) == 0) {
   plt %>%
     layout(
       title = plotly_title("Monthly Bugs (Non Sub-task) by Product (Last 12 Months)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        tick0 = format(start_month, "%Y-%m-%d"),
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(showgrid = TRUE, gridcolor = "#333333"),
+      legend = list(font = list(color = "#ffffff"))
+    )
+}
+```
+
+Bugs:Customer
+=====================================
+
+```{r bugs_customer_lookback, include=FALSE}
+BUGS_CUSTOMER_MONTHS_BACK <- 11L
+```
+
+Row
+-------------------------------------
+###
+
+```{r monthly_customer_bugs_by_severity}
+end_month   <- floor_date(Sys.Date(), "month")
+start_month <- end_month %m-% months(BUGS_CUSTOMER_MONTHS_BACK)
+month_seq   <- seq.Date(start_month, end_month, by = "1 month")
+
+df <- BUGS_DATA %>%
+  filter(Hierarchy_Type == "Regular Bug", Has_CX_Issue) %>%
+  mutate(
+    Month = floor_date(`Created At`, "month"),
+    Severity = factor(Severity, levels = SEVERITY_STACK_ORDER)
+  ) %>%
+  filter(Month >= start_month, Month <= end_month)
+
+if (nrow(df) == 0) {
+  plotly_empty(type = "scatter") %>%
+    layout(title = plotly_title("Monthly Customer Bugs (CX Issue) by Severity (Last 12 Months)"))
+} else {
+  agg <- df %>%
+    count(Month, Severity, name = "n") %>%
+    complete(Month = month_seq, Severity = SEVERITY_STACK_ORDER, fill = list(n = 0)) %>%
+    arrange(Month, Severity)
+
+  plt <- plot_ly()
+  for (sev in SEVERITY_STACK_ORDER) {
+    d <- agg %>% filter(Severity == sev)
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~n,
+        type = "scatter",
+        mode = "lines",
+        line = list(color = SEVERITY_COLORS[[sev]], width = 0.5),
+        stackgroup = "one",
+        name = sev,
+        fillcolor = SEVERITY_COLORS[[sev]],
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Customer Bugs: %{y}<br>",
+          "Severity: ", sev,
+          "<extra></extra>"
+        )
+      )
+  }
+
+  plt %>%
+    layout(
+      title = plotly_title("Monthly Customer Bugs (CX Issue) by Severity (Last 12 Months)"),
+      plot_bgcolor = "#1f1f1f",
+      paper_bgcolor = "#1f1f1f",
+      xaxis = list(
+        type = "date",
+        tickformat = "%Y-%b",
+        dtick = "M1",
+        tick0 = format(start_month, "%Y-%m-%d"),
+        showgrid = TRUE,
+        gridcolor = "#333333"
+      ),
+      yaxis = list(showgrid = TRUE, gridcolor = "#333333"),
+      legend = list(font = list(color = "#ffffff"))
+    )
+}
+```
+
+Row
+-------------------------------------
+###
+
+```{r monthly_customer_bugs_by_product}
+end_month   <- floor_date(Sys.Date(), "month")
+start_month <- end_month %m-% months(BUGS_CUSTOMER_MONTHS_BACK)
+month_seq   <- seq.Date(start_month, end_month, by = "1 month")
+
+df <- BUGS_DATA %>%
+  filter(Hierarchy_Type == "Regular Bug", Has_CX_Issue) %>%
+  mutate(Month = floor_date(`Created At`, "month")) %>%
+  filter(Month >= start_month, Month <= end_month)
+
+if (nrow(df) == 0) {
+  plotly_empty(type = "scatter") %>%
+    layout(title = plotly_title("Monthly Customer Bugs (CX Issue) by Product (Last 12 Months)"))
+} else {
+  product_levels <- names(PRODUCT_COLORS)
+  product_colors <- PRODUCT_COLORS
+  if ("Unspecified" %in% names(product_colors)) {
+    product_colors["Unspecified"] <- "#777777"
+  }
+
+  agg <- df %>%
+    count(Month, Product, name = "n") %>%
+    complete(Month = month_seq, Product = product_levels, fill = list(n = 0)) %>%
+    arrange(Month, Product)
+
+  plt <- plot_ly()
+  for (prod in product_levels) {
+    d <- agg %>% filter(Product == prod)
+    plt <- plt %>%
+      add_trace(
+        data = d,
+        x = ~Month,
+        y = ~n,
+        type = "scatter",
+        mode = "lines",
+        line = list(color = product_colors[[prod]], width = 0.5),
+        stackgroup = "one",
+        name = prod,
+        fillcolor = product_colors[[prod]],
+        hovertemplate = paste0(
+          "Month: %{x|%Y-%b}<br>",
+          "Customer Bugs: %{y}<br>",
+          "Product: ", prod,
+          "<extra></extra>"
+        )
+      )
+  }
+
+  plt %>%
+    layout(
+      title = plotly_title("Monthly Customer Bugs (CX Issue) by Product (Last 12 Months)"),
       plot_bgcolor = "#1f1f1f",
       paper_bgcolor = "#1f1f1f",
       xaxis = list(
