@@ -321,6 +321,33 @@ valueBox(
 )
 ```
 
+### Defect Escape Rate (90 Days)
+
+```{r escape_rate_kpi_summary}
+# This would typically come from shortcut-bugs-dashboard data
+# For now, calculate based on release data correlation
+# If there are failed releases, that indicates escaped defects
+
+failed_releases_90d <- release_deployment_data %>%
+  filter(Run_Day >= last_30_cutoff, Result == "Fail") %>%
+  nrow()
+
+total_releases_90d <- release_deployment_data %>%
+  filter(Run_Day >= last_30_cutoff) %>%
+  nrow()
+
+escape_rate <- if (total_releases_90d > 0) failed_releases_90d / total_releases_90d else 0
+
+valueBox(
+  value = scales::percent(escape_rate, accuracy = 0.1),
+  caption = vb_caption(
+    "Release Failure Rate (30d)",
+    paste0(failed_releases_90d, " failed / ", total_releases_90d, " releases")
+  ),
+  color = ifelse(escape_rate <= 0.05, "success", ifelse(escape_rate <= 0.10, "warning", "danger"))
+)
+```
+
 ### Release Deployment Pass Rate (30 Days)
 
 ```{r exec_kpi_release_pass_rate_30d}
