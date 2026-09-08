@@ -82,13 +82,14 @@ WORKTYPE_COLORS <- c(
 )
 
 PRODUCT_COLORS <- c(
-  "Tax"            = "#CC79A7",  # purple
-  "Roth"           = "#56B4E9",  # sky blue
-  "Platform"       = "#009E73",  # bluish green
-  "Insurance/P&C"  = "#0072B2",  # blue
-  "Estate"         = "#E69F00",  # orange
-  "Automation"     = "#D55E00",  # vermillion
-  "Unspecified"    = "#7F7F7F"   # gray
+  "Tax"             = "#CC79A7",  # purple
+  "Roth"            = "#56B4E9",  # sky blue
+  "Platform"        = "#009E73",  # bluish green
+  "Insurance/P&C"   = "#0072B2",  # blue
+  "Estate"          = "#E69F00",  # orange
+  "Automation"      = "#D55E00",  # vermillion
+  "Data Extraction" = "#F0E442",  # yellow
+  "Unspecified"     = "#7F7F7F"   # gray
 )
 
 BASE_THEME <- theme_minimal(base_size = 12) +
@@ -1009,8 +1010,8 @@ Row
 
 ```{r product_tab_tax_roth}
 plot_tickets_by_type_for_products(
-  products   = c("Tax", "Roth"),
-  title_text = "Tax + Roth: Monthly Tickets by Type (Last 12 Months)"
+  products   = c("Tax", "Roth", "Data Extraction"),
+  title_text = "Tax + Roth + Data Extraction: Monthly Tickets by Type (Last 12 Months)"
 )
 ```
 
